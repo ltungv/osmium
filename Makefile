@@ -1,11 +1,10 @@
 ################
 # BUILD
 ################
-CC=riscv64-unknown-elf-g++
-CFLAGS=-Wall -Wextra -pedantic -Wextra -O0 -g -std=c++17
-CFLAGS+=-static -ffreestanding -nostdlib -fno-rtti -fno-exceptions
+CC=riscv64-unknown-elf-gcc
+CFLAGS=-std=c++17 -Wall -Wextra -pedantic -O0 -g
+CFLAGS+=-static -nostdlib -ffreestanding -fno-rtti -fno-exceptions
 CFLAGS+=-march=rv64gc -mabi=lp64d
-INCLUDES=
 LINKER_SCRIPT=-Tsrc/lds/virt.lds
 TYPE=debug
 RUST_TARGET=./target/riscv64gc-unknown-none-elf/$(TYPE)
@@ -26,10 +25,19 @@ DRIVE=hdd.dsk
 
 all:
 	cargo build
-	$(CC) $(CFLAGS) $(LINKER_SCRIPT) $(INCLUDES) -o $(OUT) $(SOURCES_ASM) $(LIBS) $(LIB)
+	$(CC) $(CFLAGS) $(LINKER_SCRIPT) $(SOURCES_ASM) $(LIBS) $(LIB) -o $(OUT)
 
 run: all
-	$(QEMU) -machine $(MACH) -cpu $(CPU) -smp $(CPUS) -m $(MEM) -nographic -serial mon:stdio -bios none -kernel $(OUT) -drive if=none,format=raw,file=$(DRIVE),id=foo -device virtio-blk-device,drive=foo
+	$(QEMU) -machine $(MACH) \
+	-m $(MEM) \
+	-cpu $(CPU) \
+	-smp $(CPUS) \
+	-nographic \
+	-serial mon:stdio \
+	-bios none \
+	-kernel $(OUT) \
+	-drive if=none,format=raw,file=$(DRIVE),id=primary \
+	-device virtio-blk-device,drive=primary
 
 .PHONY: clean
 clean:
