@@ -18,7 +18,7 @@ _start:
 	bnez	t0, 3f
 	# SATP should be zero, but let's make sure
 	csrw	satp, zero
-	
+
 	# Disable linker instruction relaxation for the `la` instruction below.
 	# This disallows the assembler from assuming that `gp` is already initialized.
 	# This causes the value stored in `gp` to be calculated from `pc`.

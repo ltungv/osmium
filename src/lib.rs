@@ -10,15 +10,15 @@ macro_rules! print {
 #[macro_export]
 macro_rules! println
 {
-	() => ({
-    print!("\r\n")
-	});
-	($fmt:expr) => ({
-		print!(concat!($fmt, "\r\n"))
-	});
-	($fmt:expr, $($args:tt)+) => ({
-    print!(concat!($fmt, "\r\n"), $($args)+)
-	});
+    () => ({
+        print!("\r\n")
+    });
+    ($fmt:expr) => ({
+        print!(concat!($fmt, "\r\n"))
+    });
+    ($fmt:expr, $($args:tt)+) => ({
+        print!(concat!($fmt, "\r\n"), $($args)+)
+    });
 }
 
 #[no_mangle]
@@ -54,4 +54,3 @@ extern "C" fn kmain() {
     // Main should initialize all sub-systems and get ready to start scheduling.
     // The last thing this should do is start the timer.
 }
-

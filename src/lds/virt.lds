@@ -89,13 +89,13 @@ global uninitialized variables go into bss.
 SECTIONS
 {
   /*
-    The first part of our RAM layout will be the text section.
+	The first part of our RAM layout will be the text section.
 	Since our CPU instructions are here, and our memory starts at
 	0x8000_0000, we need our entry point to line up here.
   */
   .text : {
 	  /*
-	    PROVIDE allows me to access a symbol called _text_start so
+		PROVIDE allows me to access a symbol called _text_start so
 		I know where the text section starts in the operating system.
 		This should not move, but it is here for convenience.
 		The period '.' tells the linker to set _text_start to the
@@ -103,7 +103,7 @@ SECTIONS
 		memory location moves as we add things.
 	  */
 
-    PROVIDE(_text_start = .);
+	PROVIDE(_text_start = .);
 	/*
 	  We are going to layout all text sections here, starting with
 	  .text.init. The asterisk in front of the parentheses means to match
@@ -127,13 +127,13 @@ SECTIONS
 	  .text.init, this would've matched here. The assembler and linker can place
 	  things in "special" text sections, so we match any we might come across here.
 	*/
-    *(.text.init) *(.text .text.*)
+	*(.text.init) *(.text .text.*)
 
 	/*
 	  Again, with PROVIDE, we're providing a readable symbol called _text_end, which is
 	  set to the memory address AFTER .text.init, .text, and .text.*'s have been added.
 	*/
-    PROVIDE(_text_end = .);
+	PROVIDE(_text_end = .);
 	/*
 	  The portion after the right brace is in an odd format. However, this is telling the
 	  linker what memory portion to put it in. We labeled our RAM, ram, with the constraints
@@ -141,27 +141,27 @@ SECTIONS
 	  that we can do all of those things.
 
 	  >ram - This just tells the linker script to put this entire section (.text) into the
-	         ram region of memory. To my knowledge, the '>' does not mean "greater than". Instead,
+			 ram region of memory. To my knowledge, the '>' does not mean "greater than". Instead,
 			 it is a symbol to let the linker know we want to put this in ram.
 
 	  AT>ram - This sets the LMA (load memory address) region to the same thing. LMA is the final
-	           translation of a VMA (virtual memory address). With this linker script, we're loading
+			   translation of a VMA (virtual memory address). With this linker script, we're loading
 			   everything into its physical location. We'll let the kernel copy and sort out the
 			   virtual memory. That's why >ram and AT>ram are continually the same thing.
 
 	  :text  - This tells the linker script to put this into the :text program header. We've only
-	           defined three: text, data, and bss. In this case, we're telling the linker script
+			   defined three: text, data, and bss. In this case, we're telling the linker script
 			   to go into the text section.
 	*/
   } >ram AT>ram :text
    /*
-     The global pointer allows the linker to position global variables and constants into
+	 The global pointer allows the linker to position global variables and constants into
 	 independent positions relative to the gp (global pointer) register. The globals start
 	 after the text sections and are only relevant to the rodata, data, and bss sections.
    */
    PROVIDE(_global_pointer = .);
    /*
-     Most compilers create a rodata (read only data) section for global constants. However,
+	 Most compilers create a rodata (read only data) section for global constants. However,
 	 we're going to place ours in the text section. We can actually put this in :data, but
 	 since the .text section is read-only, we can place it there.
 
@@ -171,9 +171,9 @@ SECTIONS
 	 to be able to do.
    */
   .rodata : {
-    PROVIDE(_rodata_start = .);
-    *(.rodata .rodata.*)
-    PROVIDE(_rodata_end = .);
+	PROVIDE(_rodata_start = .);
+	*(.rodata .rodata.*)
+	PROVIDE(_rodata_end = .);
 	/*
 	   Again, we're placing the rodata section in the memory segment "ram" and we're putting
 	   it in the :text program header. We don't have one for rodata anyway.
@@ -186,8 +186,8 @@ SECTIONS
 	   0x8000_0000 + text section + rodata section) to 4096 bytes. This is because our paging
 	   system's resolution is 4,096 bytes or 4 KiB.
 	*/
-    . = ALIGN(4096);
-    PROVIDE(_data_start = .);
+	. = ALIGN(4096);
+	PROVIDE(_data_start = .);
 	/*
 	   sdata and data are essentially the same thing. However, compilers usually use the
 	   sdata sections for shorter, quicker loading sections. So, usually critical data
@@ -200,18 +200,18 @@ SECTIONS
 
 	   ...in that order.
 	*/
-    *(.sdata .sdata.*) *(.data .data.*)
-    PROVIDE(_data_end = .);
+	*(.sdata .sdata.*) *(.data .data.*)
+	PROVIDE(_data_end = .);
   } >ram AT>ram :data
 
   .bss : {
-    PROVIDE(_bss_start = .);
-    *(.sbss .sbss.*) *(.bss .bss.*)
-    PROVIDE(_bss_end = .);
+	PROVIDE(_bss_start = .);
+	*(.sbss .sbss.*) *(.bss .bss.*)
+	PROVIDE(_bss_end = .);
   } >ram AT>ram :bss
 
   /*
-     The following will be helpful when we allocate the kernel stack (_stack) and
+	 The following will be helpful when we allocate the kernel stack (_stack) and
 	 determine where the heap begnis and ends (_heap_start and _heap_start + _heap_size)/
 	 When we do memory allocation, we can use these symbols.
 
@@ -224,7 +224,7 @@ SECTIONS
   */
   PROVIDE(_memory_start = ORIGIN(ram));
   /*
-     Our kernel stack starts at the end of the bss segment (_bss_end). However, we're allocating
+	 Our kernel stack starts at the end of the bss segment (_bss_end). However, we're allocating
 	 0x80000 bytes (524 KiB) to our kernel stack. This should be PLENTY of space. The reason
 	 we add the memory is because the stack grows from higher memory to lower memory (bottom to top).
 	 Therefore we set the stack at the very bottom of its allocated slot.
@@ -234,7 +234,7 @@ SECTIONS
   PROVIDE(_memory_end = ORIGIN(ram) + LENGTH(ram));
 
   /*
-     Finally, our heap starts right after the kernel stack. This heap will be used mainly
+	 Finally, our heap starts right after the kernel stack. This heap will be used mainly
 	 to dole out memory for user-space applications. However, in some circumstances, it will
 	 be used for kernel memory as well.
 
