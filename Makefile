@@ -28,7 +28,8 @@ all:
 	$(CC) $(CFLAGS) $(LINKER_SCRIPT) $(SOURCES_ASM) $(LIBS) $(LIB) -o $(OUT)
 
 run: all
-	$(QEMU) -machine $(MACH) \
+	$(QEMU) \
+	-machine $(MACH) \
 	-m $(MEM) \
 	-cpu $(CPU) \
 	-smp $(CPUS) \
