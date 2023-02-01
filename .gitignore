@@ -22,3 +22,5 @@ Cargo.lock
 
 # Artifacts
 *.service
+*.elf
+*.dsk

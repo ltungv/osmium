@@ -3,15 +3,8 @@ name = "osmium"
 version = "0.1.0"
 edition = "2021"
 
-[build-dependencies]
-bootloader = "0.11"
-osmium_kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
-
-[dependencies]
-bootloader = "0.11"
-clap = { version = "4", features = ["derive"] }
-# used for UEFI booting in QEMU
-ovmf-prebuilt = "0.1.0-alpha.1"
-
-[workspace]
-members = ["kernel"]
+[lib]
+name = "osmium"
+crate-type = ["staticlib"]
+test = false
+bench = false
