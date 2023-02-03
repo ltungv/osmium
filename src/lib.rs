@@ -1,31 +1,27 @@
+//! A RISCV kernel
+
 #![no_std]
+#![deny(missing_docs)]
+#![warn(
+    clippy::all,
+    rustdoc::all,
+    missing_debug_implementations,
+    rust_2018_idioms,
+    rust_2021_compatibility
+)]
+#![feature(panic_info_message)]
 
-use core::arch::asm;
+mod uart_ns16550;
 
-#[macro_export]
-macro_rules! print {
-    ($($args:tt)+) => {{}};
-}
+use core::{arch::asm, panic::PanicInfo};
 
-#[macro_export]
-macro_rules! println
-{
-    () => ({
-        print!("\r\n")
-    });
-    ($fmt:expr) => ({
-        print!(concat!($fmt, "\r\n"))
-    });
-    ($fmt:expr, $($args:tt)+) => ({
-        print!(concat!($fmt, "\r\n"), $($args)+)
-    });
-}
+use uart_ns16550::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
 
 #[no_mangle]
 extern "C" fn eh_personality() {}
 
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &PanicInfo<'_>) -> ! {
     print!("Aborting: ");
     if let Some(p) = info.location() {
         println!(
@@ -51,6 +47,7 @@ extern "C" fn abort() -> ! {
 
 #[no_mangle]
 extern "C" fn kmain() {
-    // Main should initialize all sub-systems and get ready to start scheduling.
-    // The last thing this should do is start the timer.
+    let mut uart = unsafe { UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS) };
+    uart.initialize();
+    println!("Hello world!");
 }
