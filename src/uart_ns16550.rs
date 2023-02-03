@@ -29,13 +29,10 @@ pub struct UartDriver {
     rbr: AtomicPtr<u8>,
     thr: AtomicPtr<u8>,
     ier: AtomicPtr<u8>,
-    iir: AtomicPtr<u8>,
     fcr: AtomicPtr<u8>,
     lcr: AtomicPtr<u8>,
     mcr: AtomicPtr<u8>,
     lsr: AtomicPtr<u8>,
-    msr: AtomicPtr<u8>,
-    scr: AtomicPtr<u8>,
     dll: AtomicPtr<u8>,
     dlm: AtomicPtr<u8>,
 }
@@ -54,13 +51,10 @@ impl UartDriver {
             rbr: AtomicPtr::new(base_ptr.add(0)),
             thr: AtomicPtr::new(base_ptr.add(0)),
             ier: AtomicPtr::new(base_ptr.add(1)),
-            iir: AtomicPtr::new(base_ptr.add(2)),
             fcr: AtomicPtr::new(base_ptr.add(2)),
             lcr: AtomicPtr::new(base_ptr.add(3)),
             mcr: AtomicPtr::new(base_ptr.add(4)),
             lsr: AtomicPtr::new(base_ptr.add(5)),
-            msr: AtomicPtr::new(base_ptr.add(6)),
-            scr: AtomicPtr::new(base_ptr.add(7)),
             dll: AtomicPtr::new(base_ptr.add(0)),
             dlm: AtomicPtr::new(base_ptr.add(1)),
         }
@@ -75,15 +69,15 @@ impl UartDriver {
         let dlm = self.dlm.load(atomic::Ordering::Relaxed);
         unsafe {
             // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes
-            fcr.write(1 << 0 | 1 << 1 | 1 << 2 | 1 << 6 | 1 << 7);
+            fcr.write_volatile(1 << 0 | 1 << 1 | 1 << 2 | 1 << 6 | 1 << 7);
             // Set data word length to 8 bits
-            lcr.write(1 << 0 | 1 << 1);
+            lcr.write_volatile(1 << 0 | 1 << 1);
             // Enable receiver buffer interrupts
-            ier.write(1 << 0);
+            ier.write_volatile(1 << 0);
 
             // Enable DLAB
-            let lcr_bak = lcr.read();
-            lcr.write(lcr_bak | 1 << 7);
+            let lcr_bak = lcr.read_volatile();
+            lcr.write_volatile(lcr_bak | 1 << 7);
             // Set the divisor from a global clock rate of 22.729 MHz (22,729,000 cycles per second) to a signaling rate
             // of 2400 (BAUD). The formula given in the NS16500A specification for calculating the divisor is:
             // divisor = ceil((clock_hz) / (baud_sps x 16))
@@ -95,14 +89,14 @@ impl UartDriver {
             let divisor_ls = divisor & 0xff;
             let divisor_ms = divisor >> 8;
             // Set divisor least significant bits
-            dll.write(divisor_ls as u8);
+            dll.write_volatile(divisor_ls as u8);
             // Set divisor most significant bits
-            dlm.write(divisor_ms as u8);
+            dlm.write_volatile(divisor_ms as u8);
             // Disable DLAB
-            lcr.write(lcr_bak);
+            lcr.write_volatile(lcr_bak);
 
             // Mark data terminal ready, and signal request to send
-            mcr.write(1 << 0 | 1 << 1);
+            mcr.write_volatile(1 << 0 | 1 << 1);
         }
     }
 
@@ -111,10 +105,10 @@ impl UartDriver {
         let thr = self.thr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
         unsafe {
-            while lsr.read() & (1 << 6) == 0 {
+            while lsr.read_volatile() & (1 << 6) == 0 {
                 spin_loop();
             }
-            thr.write(byte);
+            thr.write_volatile(byte);
         }
     }
 
@@ -123,10 +117,10 @@ impl UartDriver {
         let rbr = self.rbr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
         unsafe {
-            while lsr.read() & (1 << 0) == 0 {
+            while lsr.read_volatile() & (1 << 0) == 0 {
                 spin_loop();
             }
-            rbr.read()
+            rbr.read_volatile()
         }
     }
 }

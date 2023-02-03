@@ -13,7 +13,7 @@
 
 mod uart_ns16550;
 
-use core::{arch::asm, panic::PanicInfo};
+use core::{arch::asm, panic::PanicInfo, str::from_utf8};
 
 use uart_ns16550::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
 
@@ -49,5 +49,20 @@ extern "C" fn abort() -> ! {
 extern "C" fn kmain() {
     let mut uart = unsafe { UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS) };
     uart.initialize();
+
     println!("Hello world!");
+
+    let mut buf = [0u8; 1 << 12];
+    let mut buf_idx = 0;
+    loop {
+        let c = uart.get();
+        if c == b'\n' {
+            match from_utf8(&buf[..buf_idx]) {
+                Err(e) => println!("invalid utf-8 - {}", e),
+                Ok(v) => println!("{}", v),
+            }
+        }
+        buf[buf_idx] = c;
+        buf_idx += 1;
+    }
 }
