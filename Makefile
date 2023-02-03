@@ -40,6 +40,21 @@ run: all
 	-drive if=none,format=raw,file=$(DRIVE),id=primary \
 	-device virtio-blk-device,drive=primary
 
+dbg: all
+	$(QEMU) \
+	-machine $(MACH) \
+	-m $(MEM) \
+	-cpu $(CPU) \
+	-smp $(CPUS) \
+	-nographic \
+	-serial mon:stdio \
+	-bios none \
+	-kernel $(OUT) \
+	-drive if=none,format=raw,file=$(DRIVE),id=primary \
+	-device virtio-blk-device,drive=primary \
+	-S \
+	-s
+
 .PHONY: clean
 clean:
 	cargo clean
