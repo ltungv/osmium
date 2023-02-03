@@ -1,5 +1,5 @@
 # Osmium
 
-Works on [blog-os].
+Works on [osblog].
 
-[blog-os]: https://os.phil-opp.com/minimal-rust-kernel
+[osblog]: https://osblog.stephenmarz.com
