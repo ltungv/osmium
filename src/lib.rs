@@ -13,7 +13,7 @@
 
 pub mod uart_ns16550;
 
-use core::{arch::asm, panic::PanicInfo, str::from_utf8};
+use core::{arch::asm, panic::PanicInfo};
 
 use uart_ns16550::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
 
