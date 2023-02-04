@@ -17,9 +17,6 @@ use core::{arch::asm, panic::PanicInfo, str::from_utf8};
 
 use uart_ns16550::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
 
-#[no_mangle]
-extern "C" fn eh_personality() {}
-
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     print!("Aborting: ");
@@ -37,6 +34,9 @@ fn panic(info: &PanicInfo<'_>) -> ! {
 }
 
 #[no_mangle]
+extern "C" fn eh_personality() {}
+
+#[no_mangle]
 extern "C" fn abort() -> ! {
     loop {
         unsafe {
@@ -47,8 +47,10 @@ extern "C" fn abort() -> ! {
 
 #[no_mangle]
 extern "C" fn kmain() {
-    let mut uart = unsafe { UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS) };
-    uart.initialize();
+    let mut uart = unsafe {
+        UartDriver::initialize_global(QEMU_VIRT_UART_MMIO_ADDRESS);
+        UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS)
+    };
 
     println!("Hello world!");
 

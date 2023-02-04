@@ -8,3 +8,6 @@ name = "osmium"
 crate-type = ["staticlib"]
 test = false
 bench = false
+
+[dependencies]
+spin = "0.9"

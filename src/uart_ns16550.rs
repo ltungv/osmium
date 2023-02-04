@@ -9,14 +9,22 @@ use core::{
 /// Default UART base address on the `virt` machine in QEMU.
 pub const QEMU_VIRT_UART_MMIO_ADDRESS: usize = 0x1000_0000;
 
+static mut UART_DRIVER: spin::Once<UartDriver> = spin::Once::new();
+
+/// Get a mutable reference to the global uart driver.
+pub fn global_uart_driver() -> Option<&'static mut UartDriver> {
+    unsafe { UART_DRIVER.get_mut() }
+}
+
 /// Print out using the global UART driver.
 #[macro_export]
 macro_rules! print {
-    ($($args:tt)+) => ({
-        use core::fmt::Write;
-        let mut driver = unsafe {crate::uart_ns16550::UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS)};
-        let _ = write!(driver, $($args)+);
-    });
+    ($($args:tt)+) => (
+        if let Some(driver) = crate::uart_ns16550::global_uart_driver() {
+            use core::fmt::Write;
+            let _ = write!(driver, $($args)+);
+        }
+    );
 }
 
 /// Print out with a new line using the global UART driver.
@@ -55,18 +63,27 @@ impl UartDriver {
         Self {
             rbr: AtomicPtr::new(base_ptr.add(0)),
             thr: AtomicPtr::new(base_ptr.add(0)),
-            ier: AtomicPtr::new(base_ptr.add(0)),
-            fcr: AtomicPtr::new(base_ptr.add(0)),
-            lcr: AtomicPtr::new(base_ptr.add(0)),
-            mcr: AtomicPtr::new(base_ptr.add(0)),
-            lsr: AtomicPtr::new(base_ptr.add(0)),
+            ier: AtomicPtr::new(base_ptr.add(1)),
+            fcr: AtomicPtr::new(base_ptr.add(2)),
+            lcr: AtomicPtr::new(base_ptr.add(3)),
+            mcr: AtomicPtr::new(base_ptr.add(4)),
+            lsr: AtomicPtr::new(base_ptr.add(5)),
             dll: AtomicPtr::new(base_ptr.add(0)),
-            dlm: AtomicPtr::new(base_ptr.add(0)),
+            dlm: AtomicPtr::new(base_ptr.add(1)),
         }
     }
 
+    /// Create a global UART driver and initialize it with reasonable configurations.
+    pub unsafe fn initialize_global(base_address: usize) {
+        UART_DRIVER.call_once(|| {
+            let mut driver = Self::new(base_address);
+            driver.initialize();
+            driver
+        });
+    }
+
     /// Prepare the registers so we can read/write using UART.
-    pub fn initialize(&mut self) {
+    fn initialize(&mut self) {
         let ier = self.ier.load(atomic::Ordering::Relaxed);
         let fcr = self.fcr.load(atomic::Ordering::Relaxed);
         let lcr = self.lcr.load(atomic::Ordering::Relaxed);
@@ -74,16 +91,16 @@ impl UartDriver {
         let dll = self.dll.load(atomic::Ordering::Relaxed);
         let dlm = self.dlm.load(atomic::Ordering::Relaxed);
         unsafe {
+            // Save LCR's state so we can restore it after setting the divisor.
+            let lcr_value = 1 << 1 | 1 << 0;
+
             // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes
-            fcr.write_volatile(1 << 0 | 1 << 1 | 1 << 2 | 1 << 6 | 1 << 7);
+            fcr.write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
             // Set data word length to 8 bits
-            lcr.write_volatile(1 << 0 | 1 << 1);
+            lcr.write_volatile(lcr_value);
             // Enable receiver buffer interrupts
             ier.write_volatile(1 << 0);
 
-            // Enable DLAB
-            let lcr_bak = lcr.read_volatile();
-            lcr.write_volatile(lcr_bak | 1 << 7);
             // Set the divisor from a global clock rate of 22.729 MHz (22,729,000 cycles per second) to a signaling rate
             // of 2400 (BAUD). The formula given in the NS16500A specification for calculating the divisor is:
             // divisor = ceil((clock_hz) / (baud_sps x 16))
@@ -94,15 +111,18 @@ impl UartDriver {
             let divisor = 592u16;
             let divisor_ls = divisor & 0xff;
             let divisor_ms = divisor >> 8;
+
+            // Enable DLAB
+            lcr.write_volatile(lcr_value | 1 << 7);
             // Set divisor least significant bits
             dll.write_volatile(divisor_ls as u8);
             // Set divisor most significant bits
             dlm.write_volatile(divisor_ms as u8);
             // Disable DLAB
-            lcr.write_volatile(lcr_bak);
+            lcr.write_volatile(lcr_value);
 
             // Mark data terminal ready, and signal request to send
-            mcr.write_volatile(1 << 0 | 1 << 1);
+            mcr.write_volatile(1 << 1 | 1 << 0);
         }
     }
 
