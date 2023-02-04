@@ -11,7 +11,7 @@
 )]
 #![feature(panic_info_message)]
 
-mod uart_ns16550;
+pub mod uart_ns16550;
 
 use core::{arch::asm, panic::PanicInfo, str::from_utf8};
 

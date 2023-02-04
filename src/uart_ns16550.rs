@@ -1,9 +1,12 @@
+//! This module contains the driver for the NS16550d UART hardware.
+
 use core::{
     fmt::Write,
     hint::spin_loop,
     sync::atomic::{self, AtomicPtr},
 };
 
+/// Default UART base address on the `virt` machine in QEMU.
 pub const QEMU_VIRT_UART_MMIO_ADDRESS: usize = 0x1000_0000;
 
 /// Print out using the global UART driver.
@@ -25,6 +28,7 @@ macro_rules! println {
 }
 
 /// A driver for PC16550D (Universal Asynchronous Receiver/Transmitter With FIFOs)
+#[derive(Debug)]
 pub struct UartDriver {
     rbr: AtomicPtr<u8>,
     thr: AtomicPtr<u8>,
@@ -45,21 +49,23 @@ impl Write for UartDriver {
 }
 
 impl UartDriver {
+    /// Create a new UART driver for the hardware at `base_address` in memory.
     pub unsafe fn new(base_address: usize) -> Self {
         let base_ptr = base_address as *mut u8;
         Self {
             rbr: AtomicPtr::new(base_ptr.add(0)),
             thr: AtomicPtr::new(base_ptr.add(0)),
-            ier: AtomicPtr::new(base_ptr.add(1)),
-            fcr: AtomicPtr::new(base_ptr.add(2)),
-            lcr: AtomicPtr::new(base_ptr.add(3)),
-            mcr: AtomicPtr::new(base_ptr.add(4)),
-            lsr: AtomicPtr::new(base_ptr.add(5)),
+            ier: AtomicPtr::new(base_ptr.add(0)),
+            fcr: AtomicPtr::new(base_ptr.add(0)),
+            lcr: AtomicPtr::new(base_ptr.add(0)),
+            mcr: AtomicPtr::new(base_ptr.add(0)),
+            lsr: AtomicPtr::new(base_ptr.add(0)),
             dll: AtomicPtr::new(base_ptr.add(0)),
-            dlm: AtomicPtr::new(base_ptr.add(1)),
+            dlm: AtomicPtr::new(base_ptr.add(0)),
         }
     }
 
+    /// Prepare the registers so we can read/write using UART.
     pub fn initialize(&mut self) {
         let ier = self.ier.load(atomic::Ordering::Relaxed);
         let fcr = self.fcr.load(atomic::Ordering::Relaxed);
