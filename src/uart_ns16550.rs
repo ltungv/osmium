@@ -6,22 +6,21 @@ use core::{
     sync::atomic::{self, AtomicPtr},
 };
 
+use spin::mutex::SpinMutex;
+
 /// Default UART base address on the `virt` machine in QEMU.
 pub const QEMU_VIRT_UART_MMIO_ADDRESS: usize = 0x1000_0000;
 
-static mut UART_DRIVER: spin::Once<UartDriver> = spin::Once::new();
-
-/// Get a mutable reference to the global uart driver.
-pub fn global_uart_driver() -> Option<&'static mut UartDriver> {
-    unsafe { UART_DRIVER.get_mut() }
-}
+/// The global uart driver instance.
+pub static UART_DRIVER: spin::Once<SpinMutex<UartDriver>> = spin::Once::new();
 
 /// Print out using the global UART driver.
 #[macro_export]
 macro_rules! print {
     ($($args:tt)+) => (
-        if let Some(driver) = crate::uart_ns16550::global_uart_driver() {
+        if let Some(driver) = crate::uart_ns16550::UART_DRIVER.get() {
             use core::fmt::Write;
+            let mut driver = driver.lock();
             let _ = write!(driver, $($args)+);
         }
     );
@@ -78,7 +77,7 @@ impl UartDriver {
         UART_DRIVER.call_once(|| {
             let mut driver = Self::new(base_address);
             driver.initialize();
-            driver
+            SpinMutex::new(driver)
         });
     }
 
