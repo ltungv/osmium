@@ -54,7 +54,41 @@ extern "C" fn kmain() {
 
     println!("Hello world!");
     loop {
-        let c = uart.get();
-        println!("{}", c);
+        let c = match uart.get() {
+            None => continue,
+            Some(v) => v,
+        };
+        match c {
+            // Backspace or delete
+            0x08 | 0x7f => print!("{} {}", 8 as char, 8 as char),
+            // Carriage-return or newline
+            0x0A | 0x0D => println!(),
+            // ANSI escape sequences
+            0x1B => {
+                match uart.get() {
+                    Some(0x5b) => {}
+                    _ => continue,
+                };
+                match uart.get() {
+                    Some(b'A') => {
+                        println!("That's the up arrow!");
+                    }
+                    Some(b'B') => {
+                        println!("That's the down arrow!");
+                    }
+                    Some(b'C') => {
+                        println!("That's the right arrow!");
+                    }
+                    Some(b'D') => {
+                        println!("That's the left arrow!");
+                    }
+                    _ => {
+                        println!("That's something else.....");
+                    }
+                };
+            }
+            // Everything else
+            _ => print!("{}", c as char),
+        }
     }
 }

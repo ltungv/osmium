@@ -138,14 +138,15 @@ impl UartDriver {
     }
 
     /// Read the next available byte from the Receiver Buffer Register (RBR)
-    pub fn get(&mut self) -> u8 {
+    pub fn get(&mut self) -> Option<u8> {
         let rbr = self.rbr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
         unsafe {
-            while lsr.read_volatile() & (1 << 0) == 0 {
-                spin_loop();
+            if lsr.read_volatile() & (1 << 0) == 0 {
+                None
+            } else {
+                Some(rbr.read_volatile())
             }
-            rbr.read_volatile()
         }
     }
 }
