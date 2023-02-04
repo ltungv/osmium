@@ -11,6 +11,7 @@
 )]
 #![feature(panic_info_message)]
 
+pub mod mmu;
 pub mod uart_ns16550;
 
 use core::{arch::asm, panic::PanicInfo};
