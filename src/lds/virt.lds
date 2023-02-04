@@ -1,10 +1,4 @@
 OUTPUT_ARCH(riscv)
-
-/*
-We're setting our entry point to a symbol called _start which is inside of boot.S.
-This essentially stores the address of _start as the "entry point", or where CPU
-instructions should start executing.
-*/
 ENTRY(_start)
 
 /*

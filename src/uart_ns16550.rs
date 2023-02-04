@@ -34,7 +34,7 @@ macro_rules! println {
     ($fmt:expr, $($args:tt)+) => ($crate::print!(concat!($fmt, "\r\n"), $($args)+));
 }
 
-/// A driver for PC16550D (Universal Asynchronous Receiver/Transmitter With FIFOs)
+/// A driver for PC16550D (Universal Asynchronous Receiver/Transmitter With FIFOs).
 #[derive(Debug)]
 pub struct UartDriver {
     rbr: AtomicPtr<u8>,
@@ -81,7 +81,7 @@ impl UartDriver {
         });
     }
 
-    /// Prepare the registers so we can read/write using UART.
+    /// Initialize the UART hardware registers.
     fn initialize(&mut self) {
         let ier = self.ier.load(atomic::Ordering::Relaxed);
         let fcr = self.fcr.load(atomic::Ordering::Relaxed);
@@ -90,14 +90,14 @@ impl UartDriver {
         let dll = self.dll.load(atomic::Ordering::Relaxed);
         let dlm = self.dlm.load(atomic::Ordering::Relaxed);
         unsafe {
-            // Save LCR's state so we can restore it after setting the divisor.
+            // We'll later restore LCR to this value after setting the divisor.
             let lcr_value = 1 << 1 | 1 << 0;
 
-            // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes
+            // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
             fcr.write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
-            // Set data word length to 8 bits
+            // Set data word length to 8 bits.
             lcr.write_volatile(lcr_value);
-            // Enable receiver buffer interrupts
+            // Enable receiver buffer interrupts.
             ier.write_volatile(1 << 0);
 
             // Set the divisor from a global clock rate of 22.729 MHz (22,729,000 cycles per second) to a signaling rate
@@ -111,21 +111,22 @@ impl UartDriver {
             let divisor_ls = divisor & 0xff;
             let divisor_ms = divisor >> 8;
 
-            // Enable DLAB
+            // Enable DLAB.
             lcr.write_volatile(lcr_value | 1 << 7);
-            // Set divisor least significant bits
+            // Set divisor least significant bits.
             dll.write_volatile(divisor_ls as u8);
-            // Set divisor most significant bits
+            // Set divisor most significant bits.
             dlm.write_volatile(divisor_ms as u8);
-            // Disable DLAB
+            // Disable DLAB.
             lcr.write_volatile(lcr_value);
 
-            // Mark data terminal ready, and signal request to send
+            // Mark data terminal ready, and signal request to send.
             mcr.write_volatile(1 << 1 | 1 << 0);
         }
     }
 
-    /// Write a byte into the Transmitter Holding Register (THR)
+    /// Put a byte into the Transmitter Holding Register (THR) blocking until the byte
+    /// is ready to be sent.
     pub fn put(&mut self, byte: u8) {
         let thr = self.thr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
@@ -137,7 +138,7 @@ impl UartDriver {
         }
     }
 
-    /// Read the next available byte from the Receiver Buffer Register (RBR)
+    /// Get the next available byte from the Receiver Buffer Register (RBR).
     pub fn get(&mut self) -> Option<u8> {
         let rbr = self.rbr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
