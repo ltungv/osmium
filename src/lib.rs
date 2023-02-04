@@ -53,18 +53,8 @@ extern "C" fn kmain() {
     };
 
     println!("Hello world!");
-
-    let mut buf = [0u8; 1 << 12];
-    let mut buf_idx = 0;
     loop {
         let c = uart.get();
-        if c == b'\n' {
-            match from_utf8(&buf[..buf_idx]) {
-                Err(e) => println!("invalid utf-8 - {}", e),
-                Ok(v) => println!("{}", v),
-            }
-        }
-        buf[buf_idx] = c;
-        buf_idx += 1;
+        println!("{}", c);
     }
 }
