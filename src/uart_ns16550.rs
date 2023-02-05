@@ -50,7 +50,7 @@ pub struct UartDriver {
 
 impl Write for UartDriver {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        s.bytes().for_each(|b| self.put(b));
+        s.bytes().for_each(|b| unsafe { self.put(b) });
         Ok(())
     }
 }
@@ -75,79 +75,74 @@ impl UartDriver {
     /// Create a global UART driver and initialize it with reasonable configurations.
     pub unsafe fn initialize_global(base_address: usize) {
         UART_DRIVER.call_once(|| {
-            let mut driver = Self::new(base_address);
+            let driver = Self::new(base_address);
             driver.initialize();
             SpinMutex::new(driver)
         });
     }
 
     /// Initialize the UART hardware registers.
-    fn initialize(&mut self) {
+    unsafe fn initialize(&self) {
         let ier = self.ier.load(atomic::Ordering::Relaxed);
         let fcr = self.fcr.load(atomic::Ordering::Relaxed);
         let lcr = self.lcr.load(atomic::Ordering::Relaxed);
         let mcr = self.mcr.load(atomic::Ordering::Relaxed);
         let dll = self.dll.load(atomic::Ordering::Relaxed);
         let dlm = self.dlm.load(atomic::Ordering::Relaxed);
-        unsafe {
-            // We'll later restore LCR to this value after setting the divisor.
-            let lcr_value = 1 << 1 | 1 << 0;
 
-            // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
-            fcr.write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
-            // Set data word length to 8 bits.
-            lcr.write_volatile(lcr_value);
-            // Enable receiver buffer interrupts.
-            ier.write_volatile(1 << 0);
+        // We'll later restore LCR to this value after setting the divisor.
+        let lcr_value = 1 << 1 | 1 << 0;
 
-            // Set the divisor from a global clock rate of 22.729 MHz (22,729,000 cycles per second) to a signaling rate
-            // of 2400 (BAUD). The formula given in the NS16500A specification for calculating the divisor is:
-            // divisor = ceil((clock_hz) / (baud_sps x 16))
-            // divisor = ceil(22_729_000 / (2400 x 16))
-            // divisor = ceil(22_729_000 / 38_400)
-            // divisor = ceil(591.901)
-            // divisor = 592
-            let divisor = 592u16;
-            let divisor_ls = divisor & 0xff;
-            let divisor_ms = divisor >> 8;
+        // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
+        fcr.write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
+        // Set data word length to 8 bits.
+        lcr.write_volatile(lcr_value);
+        // Enable receiver buffer interrupts.
+        ier.write_volatile(1 << 0);
 
-            // Enable DLAB.
-            lcr.write_volatile(lcr_value | 1 << 7);
-            // Set divisor least significant bits.
-            dll.write_volatile(divisor_ls as u8);
-            // Set divisor most significant bits.
-            dlm.write_volatile(divisor_ms as u8);
-            // Disable DLAB.
-            lcr.write_volatile(lcr_value);
+        // Set the divisor from a global clock rate of 22.729 MHz (22,729,000 cycles per second) to a signaling rate
+        // of 2400 (BAUD). The formula given in the NS16500A specification for calculating the divisor is:
+        // divisor = ceil((clock_hz) / (baud_sps x 16))
+        // divisor = ceil(22_729_000 / (2400 x 16))
+        // divisor = ceil(22_729_000 / 38_400)
+        // divisor = ceil(591.901)
+        // divisor = 592
+        let divisor = 592u16;
+        let divisor_ls = divisor & 0xff;
+        let divisor_ms = divisor >> 8;
 
-            // Mark data terminal ready, and signal request to send.
-            mcr.write_volatile(1 << 1 | 1 << 0);
-        }
+        // Enable DLAB.
+        lcr.write_volatile(lcr_value | 1 << 7);
+        // Set divisor least significant bits.
+        dll.write_volatile(divisor_ls as u8);
+        // Set divisor most significant bits.
+        dlm.write_volatile(divisor_ms as u8);
+        // Disable DLAB.
+        lcr.write_volatile(lcr_value);
+
+        // Mark data terminal ready, and signal request to send.
+        mcr.write_volatile(1 << 1 | 1 << 0);
     }
 
     /// Put a byte into the Transmitter Holding Register (THR) blocking until the byte
     /// is ready to be sent.
-    pub fn put(&mut self, byte: u8) {
+    pub unsafe fn put(&self, byte: u8) {
         let thr = self.thr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
-        unsafe {
-            while lsr.read_volatile() & (1 << 6) == 0 {
-                spin_loop();
-            }
-            thr.write_volatile(byte);
+        while lsr.read_volatile() & (1 << 6) == 0 {
+            spin_loop();
         }
+        thr.write_volatile(byte);
     }
 
     /// Get the next available byte from the Receiver Buffer Register (RBR).
-    pub fn get(&mut self) -> Option<u8> {
+    pub unsafe fn get(&self) -> Option<u8> {
         let rbr = self.rbr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
-        unsafe {
-            if lsr.read_volatile() & (1 << 0) == 0 {
-                None
-            } else {
-                Some(rbr.read_volatile())
-            }
+        if lsr.read_volatile() & (1 << 0) == 0 {
+            None
+        } else {
+            Some(rbr.read_volatile())
         }
     }
 }
