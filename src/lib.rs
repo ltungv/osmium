@@ -12,44 +12,16 @@
 #![feature(panic_info_message)]
 
 pub mod mmu;
-pub mod uart_ns16550;
+pub mod uart;
 
 use core::{arch::asm, mem::size_of, panic::PanicInfo};
 
-use uart_ns16550::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
+use uart::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
 
-use crate::mmu::PageDescriptor;
-
-extern "C" {
-    /// First memory address in the .text section
-    pub static TEXT_START: usize;
-    /// Last memory address in the .text section
-    pub static TEXT_END: usize;
-    /// First memory address in the .rodata section
-    pub static RODATA_START: usize;
-    /// Last memory address in the .rodata section
-    pub static RODATA_END: usize;
-    /// First memory address in the .data section
-    pub static DATA_START: usize;
-    /// Last memory address in the .data section
-    pub static DATA_END: usize;
-    /// First memory address in the .bss section
-    pub static BSS_START: usize;
-    /// Last memory address in the .bss section
-    pub static BSS_END: usize;
-    /// First memory address in the .kernel_stack section
-    pub static KERNEL_STACK_START: usize;
-    /// Last memory address in the .kernel_stack section
-    pub static KERNEL_STACK_END: usize;
-    /// First memory address in the .heap section
-    pub static HEAP_START: usize;
-    /// Last memory address in the .heap section
-    pub static HEAP_SIZE: usize;
-    /// First memory address
-    pub static MEMORY_START: usize;
-    /// Last memory address
-    pub static MEMORY_END: usize;
-}
+use crate::mmu::{
+    Page, BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
+    KERNEL_STACK_START, MEMORY_END, MEMORY_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
+};
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
@@ -100,46 +72,46 @@ extern "C" fn kinit() -> usize {
         println!("MEMORY_START = 0x{:x}", MEMORY_START);
         println!("MEMORY_END   = 0x{:x}", MEMORY_END);
 
-        let allocator = mmu::PageAllocator::new(HEAP_START, HEAP_SIZE, 12);
-        allocator.initialize();
+        let page_allocator = mmu::PageAllocator::new(HEAP_START, HEAP_SIZE, 12);
+        page_allocator.initialize();
 
-        let addr1 = allocator.alloc(2).unwrap();
-        allocator.print_page_allocations();
+        let addr1 = page_allocator.alloc(2).unwrap();
+        page_allocator.print_page_allocations();
 
-        let addr2 = allocator.alloc(4).unwrap();
-        allocator.print_page_allocations();
+        let addr2 = page_allocator.alloc(4).unwrap();
+        page_allocator.print_page_allocations();
 
-        let addr3 = allocator.alloc(8).unwrap();
-        allocator.print_page_allocations();
+        let addr3 = page_allocator.alloc(8).unwrap();
+        page_allocator.print_page_allocations();
 
-        allocator.dealloc(addr2);
-        allocator.print_page_allocations();
+        page_allocator.dealloc(addr2);
+        page_allocator.print_page_allocations();
 
-        let addr4 = allocator.alloc(2).unwrap();
-        allocator.print_page_allocations();
+        let addr4 = page_allocator.alloc(2).unwrap();
+        page_allocator.print_page_allocations();
 
-        let addr5 = allocator.alloc(2).unwrap();
-        allocator.print_page_allocations();
+        let addr5 = page_allocator.alloc(2).unwrap();
+        page_allocator.print_page_allocations();
 
-        allocator.dealloc(addr3);
-        allocator.print_page_allocations();
+        page_allocator.dealloc(addr3);
+        page_allocator.print_page_allocations();
 
-        allocator.dealloc(addr1);
-        allocator.print_page_allocations();
+        page_allocator.dealloc(addr1);
+        page_allocator.print_page_allocations();
 
-        allocator.dealloc(addr4);
-        allocator.print_page_allocations();
+        page_allocator.dealloc(addr4);
+        page_allocator.print_page_allocations();
 
-        allocator.dealloc(addr5);
-        allocator.print_page_allocations();
+        page_allocator.dealloc(addr5);
+        page_allocator.print_page_allocations();
 
-        let addr6 = allocator
-            .zalloc(HEAP_SIZE / (size_of::<PageDescriptor>() + (1usize << 12)))
+        let addr6 = page_allocator
+            .zalloc(HEAP_SIZE / (size_of::<Page>() + (1usize << 12)))
             .unwrap();
-        allocator.print_page_allocations();
+        page_allocator.print_page_allocations();
 
-        allocator.dealloc(addr6);
-        allocator.print_page_allocations();
+        page_allocator.dealloc(addr6);
+        page_allocator.print_page_allocations();
 
         let uart = UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS);
         loop {

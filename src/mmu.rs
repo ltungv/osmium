@@ -7,6 +7,37 @@ use core::{
 
 use crate::println;
 
+extern "C" {
+    /// First memory address in the .text section
+    pub static TEXT_START: usize;
+    /// Last memory address in the .text section
+    pub static TEXT_END: usize;
+    /// First memory address in the .rodata section
+    pub static RODATA_START: usize;
+    /// Last memory address in the .rodata section
+    pub static RODATA_END: usize;
+    /// First memory address in the .data section
+    pub static DATA_START: usize;
+    /// Last memory address in the .data section
+    pub static DATA_END: usize;
+    /// First memory address in the .bss section
+    pub static BSS_START: usize;
+    /// Last memory address in the .bss section
+    pub static BSS_END: usize;
+    /// First memory address in the .kernel_stack section
+    pub static KERNEL_STACK_START: usize;
+    /// Last memory address in the .kernel_stack section
+    pub static KERNEL_STACK_END: usize;
+    /// First memory address in the .heap section
+    pub static HEAP_START: usize;
+    /// Last memory address in the .heap section
+    pub static HEAP_SIZE: usize;
+    /// First memory address
+    pub static MEMORY_START: usize;
+    /// Last memory address
+    pub static MEMORY_END: usize;
+}
+
 /// All possible page type. Each type is an 8-bit bitmask.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
@@ -28,11 +59,11 @@ impl PageFlag {
 
 /// The page descriptor containing general information about physical memory pages.
 #[derive(Debug)]
-pub struct PageDescriptor {
+pub struct Page {
     flags: u8,
 }
 
-impl PageDescriptor {
+impl Page {
     fn clear(&mut self) {
         self.flags = PageFlag::Empty.repr();
     }
@@ -60,7 +91,7 @@ impl PageDescriptor {
 /// A PageDescriptor structure is allocated per `2 ^ page_order` bytes.
 #[derive(Debug)]
 pub struct PageAllocator {
-    descriptors: AtomicPtr<PageDescriptor>,
+    descriptors: AtomicPtr<Page>,
     allocations: AtomicPtr<u8>,
     total_size: usize,
     page_order: usize,
@@ -71,11 +102,11 @@ impl PageAllocator {
     /// Create a new page allocator.
     pub fn new(base_address: usize, max_size: usize, page_order: usize) -> Self {
         let page_size = 1usize << page_order;
-        let desc_size = size_of::<PageDescriptor>();
+        let desc_size = size_of::<Page>();
         let num_pages = max_size / (page_size + desc_size);
         let alloc_start = align_value(base_address + num_pages * desc_size, page_order);
         Self {
-            descriptors: AtomicPtr::new(base_address as *mut PageDescriptor),
+            descriptors: AtomicPtr::new(base_address as *mut Page),
             allocations: AtomicPtr::new(alloc_start as *mut u8),
             total_size: num_pages * page_size,
             page_order,
