@@ -43,6 +43,10 @@ extern "C" {
     pub static HEAP_START: usize;
     /// Last memory address in the .heap section
     pub static HEAP_SIZE: usize;
+    /// First memory address
+    pub static MEMORY_START: usize;
+    /// Last memory address
+    pub static MEMORY_END: usize;
 }
 
 #[panic_handler]

@@ -39,6 +39,12 @@ HEAP_START: .dword _heap_start
 .global HEAP_SIZE
 HEAP_SIZE: .dword _heap_size
 
+.global MEMORY_START
+MEMORY_START: .dword _memory_start
+
+.global MEMORY_END
+MEMORY_END: .dword _memory_end
+
 ########################
 # DATA
 ########################
