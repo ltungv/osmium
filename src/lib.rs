@@ -83,18 +83,20 @@ extern "C" fn kinit() -> usize {
         UartDriver::initialize_global(QEMU_VIRT_UART_MMIO_ADDRESS);
 
         println!();
-        println!("TEXT_START   = {}", TEXT_START);
-        println!("TEXT_END     = {}", TEXT_END);
-        println!("DATA_START   = {}", DATA_START);
-        println!("DATA_END     = {}", DATA_END);
-        println!("RODATA_START = {}", RODATA_START);
-        println!("RODATA_END   = {}", RODATA_END);
-        println!("BSS_START    = {}", BSS_START);
-        println!("BSS_END      = {}", BSS_END);
-        println!("KERNEL_STACK = {}", KERNEL_STACK_START);
-        println!("KERNEL_STACK = {}", KERNEL_STACK_END);
-        println!("HEAP_START   = {}", HEAP_START);
-        println!("HEAP_SIZE    = {}", HEAP_SIZE);
+        println!("TEXT_START   = 0x{:x}", TEXT_START);
+        println!("TEXT_END     = 0x{:x}", TEXT_END);
+        println!("DATA_START   = 0x{:x}", DATA_START);
+        println!("DATA_END     = 0x{:x}", DATA_END);
+        println!("RODATA_START = 0x{:x}", RODATA_START);
+        println!("RODATA_END   = 0x{:x}", RODATA_END);
+        println!("BSS_START    = 0x{:x}", BSS_START);
+        println!("BSS_END      = 0x{:x}", BSS_END);
+        println!("KERNEL_STACK = 0x{:x}", KERNEL_STACK_START);
+        println!("KERNEL_STACK = 0x{:x}", KERNEL_STACK_END);
+        println!("HEAP_START   = 0x{:x}", HEAP_START);
+        println!("HEAP_SIZE    = 0x{:x}", HEAP_SIZE);
+        println!("MEMORY_START = 0x{:x}", MEMORY_START);
+        println!("MEMORY_END   = 0x{:x}", MEMORY_END);
 
         let allocator = mmu::PageAllocator::new(HEAP_START, HEAP_SIZE, 12);
         allocator.initialize();
