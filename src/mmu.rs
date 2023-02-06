@@ -71,11 +71,9 @@ impl PageAllocator {
     /// Create a new page allocator.
     pub fn new(base_address: usize, max_size: usize, page_order: usize) -> Self {
         let page_size = 1usize << page_order;
-        let num_pages = max_size / page_size;
-        let alloc_start = align_value(
-            base_address + num_pages * size_of::<PageDescriptor>(),
-            page_order,
-        );
+        let desc_size = size_of::<PageDescriptor>();
+        let num_pages = max_size / (page_size + desc_size);
+        let alloc_start = align_value(base_address + num_pages * desc_size, page_order);
         Self {
             descriptors: AtomicPtr::new(base_address as *mut PageDescriptor),
             allocations: AtomicPtr::new(alloc_start as *mut u8),
@@ -151,21 +149,23 @@ impl PageAllocator {
     /// Print all page allocations, mainly used for debugging.
     pub unsafe fn print_page_allocations(&self) {
         let page_size = 1usize << self.page_order;
-        let num_pages = self.total_size / page_size;
         let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
         let allocations = self.allocations.load(atomic::Ordering::Relaxed);
         let begin = descriptors;
-        let end = descriptors.add(num_pages);
+        let end = descriptors.add(self.num_pages);
         let alloc_begin = allocations;
         let alloc_end = allocations.add(self.total_size);
         println!();
-        println!("PAGE ALLOCATION TABLE [{}/{}]", num_pages, self.total_size,);
+        println!(
+            "PAGE ALLOCATION TABLE [{}/{}]",
+            self.num_pages, self.total_size,
+        );
         println!("META: {:p} -> {:p}", begin, end);
         println!("PHYS: {:p} -> {:p}", alloc_begin, alloc_end);
         println!("------------------------------------");
         let mut current_pages_begin = None;
         let mut count_taken = 0;
-        for page_end in 0..num_pages {
+        for page_end in 0..self.num_pages {
             let descriptor = descriptors.add(page_end);
             let is_taken = (*descriptor).is_flagged(PageFlag::Taken);
             if !is_taken {
@@ -187,7 +187,7 @@ impl PageAllocator {
                 );
             }
         }
-        let count_free = num_pages - count_taken;
+        let count_free = self.num_pages - count_taken;
         if count_taken != 0 {
             println!("------------------------------------");
         }

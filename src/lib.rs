@@ -14,9 +14,11 @@
 pub mod mmu;
 pub mod uart_ns16550;
 
-use core::{arch::asm, panic::PanicInfo};
+use core::{arch::asm, mem::size_of, panic::PanicInfo};
 
 use uart_ns16550::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
+
+use crate::mmu::PageDescriptor;
 
 extern "C" {
     /// First memory address in the .text section
@@ -129,6 +131,14 @@ extern "C" fn kinit() -> usize {
         allocator.print_page_allocations();
 
         allocator.dealloc(addr5);
+        allocator.print_page_allocations();
+
+        let addr6 = allocator
+            .zalloc(HEAP_SIZE / (size_of::<PageDescriptor>() + (1usize << 12)))
+            .unwrap();
+        allocator.print_page_allocations();
+
+        allocator.dealloc(addr6);
         allocator.print_page_allocations();
 
         let uart = UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS);
