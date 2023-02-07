@@ -20,8 +20,8 @@ use core::{arch::asm, panic::PanicInfo};
 
 #[cfg(debug_assertions)]
 use mmu::{
-    Page, BSS_END, BSS_START, DATA_END, DATA_START, KERNEL_STACK_END, KERNEL_STACK_START,
-    MEMORY_END, MEMORY_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
+    BSS_END, BSS_START, DATA_END, DATA_START, KERNEL_STACK_END, KERNEL_STACK_START, MEMORY_END,
+    MEMORY_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
 };
 use mmu::{HEAP_SIZE, HEAP_START};
 use uart::{UartDriver, QEMU_VIRT_UART_MMIO_ADDRESS};
@@ -110,7 +110,7 @@ extern "C" fn kinit() -> usize {
             page_allocator.print_page_allocations();
 
             let addr6 = page_allocator
-                .zalloc(HEAP_SIZE / (size_of::<Page>() + (1usize << 12)))
+                .zalloc(HEAP_SIZE / (size_of::<u8>() + (1usize << 12)))
                 .unwrap();
             page_allocator.print_page_allocations();
 
