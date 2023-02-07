@@ -5,6 +5,7 @@ use core::{
     sync::atomic::{self, AtomicPtr},
 };
 
+#[cfg(debug_assertions)]
 use crate::println;
 
 extern "C" {
@@ -177,7 +178,28 @@ impl PageAllocator {
         (*addr).clear();
     }
 
+    /// Find a first address of a contiguous region of one or more free pages.
+    unsafe fn find_free_pages(&self, pages: usize) -> Option<usize> {
+        assert!(pages > 0);
+        let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
+        let mut current_pages_begin = None;
+        for pages_end in 0..self.num_pages {
+            let is_taken = (*descriptors.add(pages_end)).is_flagged(PageFlag::Taken);
+            if is_taken {
+                current_pages_begin.take();
+                continue;
+            }
+            let pages_begin = *current_pages_begin.get_or_insert(pages_end);
+            let free_pages = pages_end - pages_begin + 1;
+            if free_pages == pages {
+                return Some(pages_begin);
+            }
+        }
+        None
+    }
+
     /// Print all page allocations, mainly used for debugging.
+    #[cfg(debug_assertions)]
     pub unsafe fn print_page_allocations(&self) {
         let page_size = 1usize << self.page_order;
         let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
@@ -233,26 +255,6 @@ impl PageAllocator {
             count_free * page_size
         );
         println!();
-    }
-
-    /// Find a first address of a contiguous region of one or more free pages.
-    unsafe fn find_free_pages(&self, pages: usize) -> Option<usize> {
-        assert!(pages > 0);
-        let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
-        let mut current_pages_begin = None;
-        for pages_end in 0..self.num_pages {
-            let is_taken = (*descriptors.add(pages_end)).is_flagged(PageFlag::Taken);
-            if is_taken {
-                current_pages_begin.take();
-                continue;
-            }
-            let pages_begin = *current_pages_begin.get_or_insert(pages_end);
-            let free_pages = pages_end - pages_begin + 1;
-            if free_pages == pages {
-                return Some(pages_begin);
-            }
-        }
-        None
     }
 }
 

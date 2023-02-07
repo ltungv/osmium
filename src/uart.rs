@@ -50,7 +50,11 @@ pub struct UartDriver {
 
 impl Write for UartDriver {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        s.bytes().for_each(|b| unsafe { self.put(b) });
+        s.bytes().for_each(|b| {
+            while let None = unsafe { self.put(b) } {
+                spin_loop();
+            }
+        });
         Ok(())
     }
 }
@@ -126,13 +130,14 @@ impl UartDriver {
 
     /// Put a byte into the Transmitter Holding Register (THR) blocking until the byte
     /// is ready to be sent.
-    pub unsafe fn put(&self, byte: u8) {
+    pub unsafe fn put(&self, byte: u8) -> Option<()> {
         let thr = self.thr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
-        while lsr.read_volatile() & (1 << 6) == 0 {
-            spin_loop();
+        if lsr.read_volatile() & (1 << 6) == 0 {
+            None
+        } else {
+            Some(thr.write_volatile(byte))
         }
-        thr.write_volatile(byte);
     }
 
     /// Get the next available byte from the Receiver Buffer Register (RBR).
