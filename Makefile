@@ -6,8 +6,12 @@ CFLAGS=-std=c++17 -Wall -Wextra -pedantic -O0 -g
 CFLAGS+=-static -nostdlib -ffreestanding -fno-rtti -fno-exceptions
 CFLAGS+=-march=rv64gc -mabi=lp64d
 LINKER_SCRIPT=-Tsrc/lds/virt.lds
-TYPE=debug
-RUST_TARGET=./target/riscv64gc-unknown-none-elf/$(TYPE)
+RUST_PROFILE=dev
+ifeq ($(RUST_PROFILE),dev)
+	RUST_TARGET=./target/riscv64gc-unknown-none-elf/debug
+else
+	RUST_TARGET=./target/riscv64gc-unknown-none-elf/$(RUST_PROFILE)
+endif
 LIBS=-L$(RUST_TARGET)
 SOURCES_ASM=$(wildcard src/asm/*.S)
 LIB=-losmium -lgcc
