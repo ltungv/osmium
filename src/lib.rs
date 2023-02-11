@@ -58,8 +58,7 @@ extern "C" fn abort() -> ! {
 extern "C" fn kinit() -> usize {
     unsafe {
         UartDriver::initialize_global(QEMU_VIRT_UART_MMIO_ADDRESS);
-        let page_allocator = mmu::PageAllocator::new(HEAP_START, HEAP_SIZE, 12);
-        page_allocator.initialize();
+        mmu::PageAllocator::initialize_global(HEAP_START, HEAP_SIZE, 12);
 
         #[cfg(debug_assertions)]
         {
@@ -78,6 +77,8 @@ extern "C" fn kinit() -> usize {
             println!("HEAP_SIZE    = 0x{:x}", HEAP_SIZE);
             println!("MEMORY_START = 0x{:x}", MEMORY_START);
             println!("MEMORY_END   = 0x{:x}", MEMORY_END);
+
+            let page_allocator = mmu::PageAllocator::new(HEAP_START, HEAP_SIZE, 12);
 
             let addr1 = page_allocator.alloc(2).unwrap();
             page_allocator.print_page_allocations();

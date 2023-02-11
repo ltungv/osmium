@@ -18,7 +18,7 @@ pub static UART_DRIVER: spin::Once<SpinMutex<UartDriver>> = spin::Once::new();
 #[macro_export]
 macro_rules! print {
     ($($args:tt)+) => (
-        if let Some(driver) = crate::uart::UART_DRIVER.get() {
+        if let Some(driver) = $crate::uart::UART_DRIVER.get() {
             use core::fmt::Write;
             let mut driver = driver.lock();
             let _ = write!(driver, $($args)+);
