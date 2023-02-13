@@ -3,14 +3,11 @@
 use core::{
     fmt::Display,
     mem::size_of,
-    ops::{BitAnd, BitOr},
+    ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Index, IndexMut},
     sync::atomic::{self, AtomicPtr},
 };
 
 use spin::mutex::SpinMutex;
-
-#[cfg(debug_assertions)]
-use crate::println;
 
 extern "C" {
     /// First memory address in the .text section
@@ -83,7 +80,7 @@ impl PageTable {
         // Make sure that Read, Write, or Execute have been provided,
         // otherwise, we'll leak memory and always create a page fault.
         assert!(bits & PageTableEntryFlag::rwx().0 != 0);
-        let page_allocator = PAGE_ALLOCATOR
+        let mut page_allocator = PAGE_ALLOCATOR
             .get()
             .ok_or(PageTableError::InvalidState)?
             .lock();
@@ -119,7 +116,7 @@ impl PageTable {
 
     /// Unmap the page table.
     pub fn unmap(&mut self) -> Result<(), PageTableError> {
-        let page_allocator = PAGE_ALLOCATOR
+        let mut page_allocator = PAGE_ALLOCATOR
             .get()
             .ok_or(PageTableError::InvalidState)?
             .lock();
@@ -143,9 +140,13 @@ impl PageTable {
                     continue;
                 }
                 let table_lvl0_addr = (entry_lvl1.get() & !0x3ff) << 2;
-                page_allocator.dealloc(table_lvl0_addr as *const u8);
+                unsafe {
+                    page_allocator.dealloc(table_lvl0_addr as *const u8);
+                }
             }
-            page_allocator.dealloc(table_lvl1_addr as *const u8);
+            unsafe {
+                page_allocator.dealloc(table_lvl1_addr as *const u8);
+            }
         }
         Ok(())
     }
@@ -233,20 +234,6 @@ impl PageTableEntry {
 #[derive(Debug, Clone, Copy)]
 struct PageTableEntryFlag(i64);
 
-// #[derive(Debug, Clone, Copy)]
-// #[repr(i64)]
-// enum PageTableEntryFlag {
-//     None = 0,
-//     Valid = 1 << 0,
-//     Read = 1 << 1,
-//     Write = 1 << 2,
-//     Execute = 1 << 3,
-//     User = 1 << 4,
-//     Global = 1 << 5,
-//     Access = 1 << 6,
-//     Dirty = 1 << 7,
-// }
-
 impl BitOr for PageTableEntryFlag {
     type Output = Self;
 
@@ -312,53 +299,113 @@ pub static PAGE_ALLOCATOR: spin::Once<SpinMutex<PageAllocator>> = spin::Once::ne
 /// A PageDescriptor structure is allocated per `2 ^ page_order` bytes.
 #[derive(Debug)]
 pub struct PageAllocator {
-    descriptors: AtomicPtr<Page>,
+    descriptors: PageDescriptors,
     allocations: AtomicPtr<u8>,
     total_size: usize,
     page_order: usize,
-    num_pages: usize,
+}
+
+impl Display for PageAllocator {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let page_size = 1usize << self.page_order;
+        //let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
+        let begin = self.descriptors.addr();
+        let end = begin + self.descriptors.pages * size_of::<PageDescriptor>();
+        let allocations = self.allocations.load(atomic::Ordering::Relaxed);
+        let alloc_begin = allocations;
+        let alloc_end = unsafe { allocations.add(self.total_size) };
+        writeln!(
+            f,
+            "PAGE ALLOCATION TABLE [{}/{}]",
+            self.descriptors.pages, self.total_size,
+        )?;
+        writeln!(f, "META: {begin:x} -> {end:x}")?;
+        writeln!(f, "PHYS: {alloc_begin:p} -> {alloc_end:p}")?;
+        writeln!(f, "------------------------------------")?;
+        let mut current_pages_begin = None;
+        let mut count_taken = 0;
+        for (page_end, descriptor) in (&self.descriptors).into_iter().enumerate() {
+            let is_taken = descriptor.flags.contains(PageFlags::TAKEN);
+            if !is_taken {
+                continue;
+            }
+            count_taken += 1;
+            let pages_begin = *current_pages_begin.get_or_insert(page_end);
+            let is_last = descriptor.flags.contains(PageFlags::LAST);
+            if is_last {
+                current_pages_begin.take();
+                let addr_begin = unsafe { allocations.add(pages_begin * page_size) };
+                let addr_end = unsafe { allocations.add(page_end * page_size + page_size) };
+                writeln!(
+                    f,
+                    "[{:>4}] 0x{:x} => 0x{:x}: {:>3} page(s)",
+                    pages_begin,
+                    addr_begin as usize,
+                    addr_end as usize,
+                    page_end - pages_begin + 1
+                )?;
+            }
+        }
+        let count_free = self.descriptors.pages - count_taken;
+        if count_taken != 0 {
+            writeln!(f, "------------------------------------")?;
+        }
+        writeln!(
+            f,
+            "Used: {:>6} pages ({:>10} bytes).",
+            count_taken,
+            count_taken * page_size
+        )?;
+        writeln!(
+            f,
+            "Free: {:>6} pages ({:>10} bytes).",
+            count_free,
+            count_free * page_size
+        )?;
+        Ok(())
+    }
 }
 
 impl PageAllocator {
     /// Create a new page allocator.
     pub fn new(base_address: usize, max_size: usize, page_order: usize) -> Self {
         let page_size = 1usize << page_order;
-        let desc_size = size_of::<Page>();
-        let num_pages = max_size / (page_size + desc_size);
-        let alloc_start = align_value(base_address + num_pages * desc_size, page_order);
+        let desc_size = size_of::<PageDescriptor>();
+        let pages = max_size / (page_size + desc_size);
+        let alloc_start = align_value(base_address + pages * desc_size, page_order);
         Self {
-            descriptors: AtomicPtr::new(base_address as *mut Page),
+            descriptors: PageDescriptors::new(base_address, pages),
             allocations: AtomicPtr::new(alloc_start as *mut u8),
-            total_size: num_pages * page_size,
+            total_size: pages * page_size,
             page_order,
-            num_pages,
         }
     }
 
     /// Create and initialize the global page allocator.
     pub fn initialize_global(base_address: usize, max_size: usize, page_order: usize) {
         PAGE_ALLOCATOR.call_once(|| {
-            let allocator = Self::new(base_address, max_size, page_order);
+            let mut allocator = Self::new(base_address, max_size, page_order);
             allocator.initialize();
             SpinMutex::new(allocator)
         });
     }
 
-    /// Initialize the page allocator system. There are several ways that we can
-    /// implement the page allocator:
-    fn initialize(&self) {
-        let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
-        (0..self.num_pages).for_each(|i| unsafe { (*descriptors.add(i)).clear() });
+    /// Initialize the page allocator system.
+    fn initialize(&mut self) {
+        for descriptor in &mut self.descriptors {
+            descriptor.flags.clear();
+        }
     }
 
     /// Allocate a contiguous region of one or more pages.
-    pub fn alloc(&self, pages: usize) -> Option<*mut u8> {
+    pub fn alloc(&mut self, pages: usize) -> Option<*mut u8> {
         assert!(pages > 0);
-        let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
         let allocations = self.allocations.load(atomic::Ordering::Relaxed);
         self.find_free_pages(pages).map(|offset| unsafe {
-            (offset..offset + pages).for_each(|i| (*descriptors.add(i)).set_flag(PageFlag::Taken));
-            (*descriptors.add(offset + pages - 1)).set_flag(PageFlag::Last);
+            (offset..offset + pages).for_each(|i| self.descriptors[i].flags.set(PageFlags::TAKEN));
+            self.descriptors[offset + pages - 1]
+                .flags
+                .set(PageFlags::LAST);
             // The PageDescriptor structures themselves aren't the useful memory.
             // Instead, there is 1 PageDescriptor structure per 4096 bytes.
             let page_size = 1usize << self.page_order;
@@ -367,7 +414,7 @@ impl PageAllocator {
     }
 
     /// Allocate a contiguous region of one or more pages and set all bytes in the region to zero.
-    pub fn zalloc(&self, pages: usize) -> Option<*mut u8> {
+    pub fn zalloc(&mut self, pages: usize) -> Option<*mut u8> {
         // Allocate and zero a page.
         // First, let's get the allocation
         let page_ptr = self.alloc(pages);
@@ -385,47 +432,38 @@ impl PageAllocator {
     ///
     /// Caller must make sure that this function is only called with the starting address of a
     /// continguous page region
-    pub fn dealloc(&self, ptr: *const u8) {
+    pub unsafe fn dealloc(&mut self, ptr: *const u8) {
         // Make sure we don't try to free a null pointer.
         assert!(!ptr.is_null());
-        let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
         let allocations = self.allocations.load(atomic::Ordering::Relaxed);
         let page_size = 1usize << self.page_order;
-        let page_offset = unsafe { ptr.sub(allocations as usize) as usize };
-        let page = page_offset / page_size;
+        let page_offset = ptr.sub(allocations as usize) as usize;
 
-        let mut addr = unsafe { descriptors.add(page) };
-        // Make sure that the address makes sense.
-        assert!((addr as usize) < (descriptors as usize) + self.total_size);
-
-        // Keep clearing pages until we hit the last page.
-        unsafe {
-            while (*addr).is_flagged(PageFlag::Taken) && !(*addr).is_flagged(PageFlag::Last) {
-                (*addr).clear();
-                addr = addr.add(1);
-            }
+        let mut page = page_offset / page_size;
+        while self.descriptors[page].flags.contains(PageFlags::TAKEN)
+            && !self.descriptors[page].flags.contains(PageFlags::LAST)
+        {
+            self.descriptors[page].flags.clear();
+            page += 1;
         }
-
         // If the following assertion fails, it is most likely
         // caused by a double-free.
         assert!(
-            unsafe { (*addr).is_flagged(PageFlag::Last) },
+            self.descriptors[page].flags.contains(PageFlags::LAST),
             "Possible double-free detected! (Not taken found before last)"
         );
         // If we get here, we've taken care of all previous pages and
         // we are on the last page.
-        unsafe {
-            (*addr).clear();
-        }
+        self.descriptors[page].flags.clear();
     }
 
     /// Find a first address of a contiguous region of one or more free pages.
     fn find_free_pages(&self, pages: usize) -> Option<usize> {
         assert!(pages > 0);
-        let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
+        // let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
         let mut current_pages_begin = None;
-        for pages_end in 0..self.num_pages {
-            let is_taken = unsafe { (*descriptors.add(pages_end)).is_flagged(PageFlag::Taken) };
+        for (pages_end, descriptor) in self.descriptors.into_iter().enumerate() {
+            let is_taken = descriptor.flags.contains(PageFlags::TAKEN);
             if is_taken {
                 current_pages_begin.take();
                 continue;
@@ -438,108 +476,176 @@ impl PageAllocator {
         }
         None
     }
+}
 
-    /// Print all page allocations, mainly used for debugging.
-    #[cfg(debug_assertions)]
-    pub fn print_page_allocations(&self) {
-        let page_size = 1usize << self.page_order;
-        let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
-        let allocations = self.allocations.load(atomic::Ordering::Relaxed);
-        let begin = descriptors;
-        let alloc_begin = allocations;
-        let end = unsafe { descriptors.add(self.num_pages) };
-        let alloc_end = unsafe { allocations.add(self.total_size) };
-        println!();
-        println!(
-            "PAGE ALLOCATION TABLE [{}/{}]",
-            self.num_pages, self.total_size,
-        );
-        println!("META: {:p} -> {:p}", begin, end);
-        println!("PHYS: {:p} -> {:p}", alloc_begin, alloc_end);
-        println!("------------------------------------");
-        let mut current_pages_begin = None;
-        let mut count_taken = 0;
-        for page_end in 0..self.num_pages {
-            let descriptor = unsafe { descriptors.add(page_end) };
-            let is_taken = unsafe { (*descriptor).is_flagged(PageFlag::Taken) };
-            if !is_taken {
-                continue;
-            }
-            count_taken += 1;
-            let pages_begin = *current_pages_begin.get_or_insert(page_end);
-            let is_last = unsafe { (*descriptor).is_flagged(PageFlag::Last) };
-            if is_last {
-                current_pages_begin.take();
-                let addr_begin = unsafe { allocations.add(pages_begin * page_size) };
-                let addr_end = unsafe { allocations.add(page_end * page_size) };
-                println!(
-                    "[{:>4}] 0x{:x} => 0x{:x}: {:>3} page(s)",
-                    pages_begin,
-                    addr_begin as usize,
-                    addr_end as usize,
-                    page_end - pages_begin + 1
-                );
-            }
+#[derive(Debug)]
+struct PageDescriptors {
+    addr: AtomicPtr<PageDescriptor>,
+    pages: usize,
+}
+
+impl PageDescriptors {
+    /// Create a list of page descriptors.
+    fn new(base_address: usize, pages: usize) -> Self {
+        Self {
+            addr: AtomicPtr::new(base_address as *mut PageDescriptor),
+            pages,
         }
-        let count_free = self.num_pages - count_taken;
-        if count_taken != 0 {
-            println!("------------------------------------");
+    }
+
+    fn addr(&self) -> usize {
+        self.addr.load(atomic::Ordering::Relaxed) as usize
+    }
+}
+
+impl IntoIterator for &PageDescriptors {
+    type Item = &'static PageDescriptor;
+    type IntoIter = PageDescriptorsIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PageDescriptorsIter {
+            addr: self.addr.load(atomic::Ordering::Relaxed),
+            pages: self.pages,
+            offset: 0,
         }
-        println!(
-            "Used: {:>6} pages ({:>10} bytes).",
-            count_taken,
-            count_taken * page_size
-        );
-        println!(
-            "Free: {:>6} pages ({:>10} bytes).",
-            count_free,
-            count_free * page_size
-        );
-        println!();
+    }
+}
+
+impl IntoIterator for &mut PageDescriptors {
+    type Item = &'static mut PageDescriptor;
+    type IntoIter = PageDescriptorsIterMut;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PageDescriptorsIterMut {
+            addr: self.addr.load(atomic::Ordering::Relaxed),
+            pages: self.pages,
+            offset: 0,
+        }
+    }
+}
+
+impl Index<usize> for PageDescriptors {
+    type Output = PageDescriptor;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        if index >= self.pages {
+            panic!("Out of bounds");
+        }
+        let addr = self.addr.load(atomic::Ordering::Relaxed);
+        unsafe { &*addr.add(index) }
+    }
+}
+
+impl IndexMut<usize> for PageDescriptors {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        if index >= self.pages {
+            panic!("Out of bounds");
+        }
+        let addr = self.addr.load(atomic::Ordering::Relaxed);
+        unsafe { &mut *addr.add(index) }
+    }
+}
+
+struct PageDescriptorsIter {
+    addr: *mut PageDescriptor,
+    pages: usize,
+    offset: usize,
+}
+
+impl Iterator for PageDescriptorsIter {
+    type Item = &'static PageDescriptor;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.pages {
+            return None;
+        }
+        let page = self.offset;
+        self.offset += 1;
+        unsafe { Some(&*self.addr.add(page)) }
+    }
+}
+
+struct PageDescriptorsIterMut {
+    addr: *mut PageDescriptor,
+    pages: usize,
+    offset: usize,
+}
+
+impl Iterator for PageDescriptorsIterMut {
+    type Item = &'static mut PageDescriptor;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.pages {
+            return None;
+        }
+        let page = self.offset;
+        self.offset += 1;
+        unsafe { Some(&mut *self.addr.add(page)) }
     }
 }
 
 /// The page descriptor containing general information about physical memory pages.
 #[derive(Debug)]
-struct Page {
-    flags: u8,
+struct PageDescriptor {
+    flags: PageFlags,
 }
 
-impl Page {
+/// A 8-bit bitmask representing the state of a memory page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PageFlags(u8);
+
+impl PageFlags {
+    /// Page has not been used.
+    const EMPTY: Self = Self(0);
+    /// Page has been taken by the allocator.
+    const TAKEN: Self = Self(1 << 0);
+    /// Page is the last one in the allocated pages.
+    const LAST: Self = Self(1 << 1);
+
     /// Enable the bit corresponding to the given page type.
-    fn set_flag(&mut self, flag: PageFlag) {
-        self.flags |= flag.u8()
+    fn set(&mut self, flags: Self) {
+        *self |= flags;
     }
 
     /// Return true of the given flag is set.
-    fn is_flagged(&self, flag: PageFlag) -> bool {
-        if self.flags == 0 && flag.u8() == 0 {
+    fn contains(&self, flags: Self) -> bool {
+        if *self == PageFlags::EMPTY && flags == PageFlags::EMPTY {
             return true;
         }
-        self.flags & flag.u8() != 0
+        *self & flags != PageFlags::EMPTY
     }
 
+    /// Clear all previously set flags.
     fn clear(&mut self) {
-        self.flags = PageFlag::Empty.u8();
+        *self = Self::EMPTY;
     }
 }
 
-/// All possible page type. Each type is an 8-bit bitmask.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy)]
-enum PageFlag {
-    /// Page is not allocated.
-    Empty = 0,
-    /// Page is taken.
-    Taken = 1 << 0,
-    /// Page is that last one in a contiguous region.
-    Last = 1 << 1,
+impl BitAnd for PageFlags {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
 }
 
-impl PageFlag {
-    /// Get the inner value of the enum.
-    fn u8(self) -> u8 {
-        self as u8
+impl BitAndAssign for PageFlags {
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0
+    }
+}
+
+impl BitOr for PageFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for PageFlags {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0
     }
 }
 

@@ -78,45 +78,45 @@ extern "C" fn kinit() -> usize {
             println!("MEMORY_START = 0x{:x}", MEMORY_START);
             println!("MEMORY_END   = 0x{:x}", MEMORY_END);
 
-            let page_allocator = mmu::PageAllocator::new(HEAP_START, HEAP_SIZE, 12);
+            let mut page_allocator = mmu::PageAllocator::new(HEAP_START, HEAP_SIZE, 12);
 
             let addr1 = page_allocator.alloc(2).unwrap();
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             let addr2 = page_allocator.alloc(4).unwrap();
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             let addr3 = page_allocator.alloc(8).unwrap();
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             page_allocator.dealloc(addr2);
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             let addr4 = page_allocator.alloc(2).unwrap();
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             let addr5 = page_allocator.alloc(2).unwrap();
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             page_allocator.dealloc(addr3);
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             page_allocator.dealloc(addr1);
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             page_allocator.dealloc(addr4);
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             page_allocator.dealloc(addr5);
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             let addr6 = page_allocator
                 .zalloc(HEAP_SIZE / (size_of::<u8>() + (1usize << 12)))
                 .unwrap();
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
 
             page_allocator.dealloc(addr6);
-            page_allocator.print_page_allocations();
+            println!("{}", page_allocator);
         }
 
         let uart = UartDriver::new(QEMU_VIRT_UART_MMIO_ADDRESS);
