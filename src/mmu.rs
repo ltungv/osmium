@@ -301,23 +301,23 @@ pub static PAGE_ALLOCATOR: spin::Once<SpinMutex<PageAllocator>> = spin::Once::ne
 pub struct PageAllocator {
     descriptors: PageDescriptors,
     allocations: AtomicPtr<u8>,
-    total_size: usize,
     page_order: usize,
 }
 
 impl Display for PageAllocator {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let page_size = 1usize << self.page_order;
+        let total_size = self.descriptors.pages * page_size;
         //let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
         let begin = self.descriptors.addr();
         let end = begin + self.descriptors.pages * size_of::<PageDescriptor>();
         let allocations = self.allocations.load(atomic::Ordering::Relaxed);
         let alloc_begin = allocations;
-        let alloc_end = unsafe { allocations.add(self.total_size) };
+        let alloc_end = unsafe { allocations.add(total_size) };
         writeln!(
             f,
             "PAGE ALLOCATION TABLE [{}/{}]",
-            self.descriptors.pages, self.total_size,
+            self.descriptors.pages, total_size,
         )?;
         writeln!(f, "META: {begin:x} -> {end:x}")?;
         writeln!(f, "PHYS: {alloc_begin:p} -> {alloc_end:p}")?;
@@ -376,7 +376,6 @@ impl PageAllocator {
         Self {
             descriptors: PageDescriptors::new(base_address, pages),
             allocations: AtomicPtr::new(alloc_start as *mut u8),
-            total_size: pages * page_size,
             page_order,
         }
     }
