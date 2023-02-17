@@ -3,7 +3,7 @@
 use core::{
     fmt::Display,
     mem::size_of,
-    ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Index, IndexMut},
+    ops::{Index, IndexMut},
     sync::atomic::{self, AtomicPtr},
 };
 
@@ -79,7 +79,7 @@ impl PageTable {
     ) -> Result<(), PageTableError> {
         // Make sure that Read, Write, or Execute have been provided,
         // otherwise, we'll leak memory and always create a page fault.
-        assert!(bits & PageTableEntryFlag::rwx().0 != 0);
+        assert!(bits & PageTableEntry::RWX != 0);
         let mut page_allocator = PAGE_ALLOCATOR
             .get()
             .ok_or(PageTableError::InvalidState)?
@@ -102,7 +102,7 @@ impl PageTable {
                 // The page number can be obtain by `addr >> 12`. However, we only shift right by 2
                 // because the first 10 bits are used for the flags. This means the PNN section of
                 // the entry is containing the page number.
-                entry.set(page as i64 >> 2 | PageTableEntryFlag::valid().0);
+                entry.set(page as i64 >> 2 | PageTableEntry::VALID);
             }
             // Go to the next entry.
             let table = ((entry.get() & !0x3ff) << 2) as *mut PageTable;
@@ -110,7 +110,7 @@ impl PageTable {
         }
         // Store the PPN at the entry at VPN[0]
         let ppn = paddr >> 12 & 0xfff_ffff_ffff;
-        entry.set((ppn << 10) as i64 | bits | PageTableEntryFlag::valid().0);
+        entry.set((ppn << 10) as i64 | bits | PageTableEntry::VALID);
         Ok(())
     }
 
@@ -212,6 +212,13 @@ impl PageTable {
 struct PageTableEntry(i64);
 
 impl PageTableEntry {
+    const EMPTY: i64 = 0;
+    const VALID: i64 = 1 << 0;
+    const READ: i64 = 1 << 1;
+    const WRITE: i64 = 1 << 2;
+    const EXECUTE: i64 = 1 << 3;
+    const RWX: i64 = 1 << 1 | 1 << 2 | 1 << 3;
+
     fn get(&self) -> i64 {
         self.0
     }
@@ -222,73 +229,12 @@ impl PageTableEntry {
 
     // True if the V bit (bit index #0) is 1.
     fn is_valid(&self) -> bool {
-        self.0 & PageTableEntryFlag::valid().0 != 0
+        self.0 & Self::VALID != Self::EMPTY
     }
 
     // A leaf has one or more RWX bits set
     fn is_leaf(&self) -> bool {
-        self.0 & PageTableEntryFlag::rwx().0 != 0
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PageTableEntryFlag(i64);
-
-impl BitOr for PageTableEntryFlag {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        PageTableEntryFlag(self.0 | rhs.0)
-    }
-}
-
-impl BitAnd for PageTableEntryFlag {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        PageTableEntryFlag(self.0 & rhs.0)
-    }
-}
-
-impl PageTableEntryFlag {
-    fn none() -> PageTableEntryFlag {
-        PageTableEntryFlag(0)
-    }
-
-    fn valid() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 0)
-    }
-
-    fn read() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 1)
-    }
-
-    fn write() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 2)
-    }
-
-    fn execute() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 3)
-    }
-
-    fn user() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 4)
-    }
-
-    fn global() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 5)
-    }
-
-    fn access() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 6)
-    }
-
-    fn dirty() -> PageTableEntryFlag {
-        PageTableEntryFlag(1 << 7)
-    }
-
-    fn rwx() -> PageTableEntryFlag {
-        Self::read() | Self::write() | Self::execute()
+        self.0 & Self::RWX != Self::EMPTY
     }
 }
 
@@ -325,13 +271,13 @@ impl Display for PageAllocator {
         let mut current_pages_begin = None;
         let mut count_taken = 0;
         for (page_end, descriptor) in (&self.descriptors).into_iter().enumerate() {
-            let is_taken = descriptor.flags.contains(PageFlags::TAKEN);
+            let is_taken = descriptor.contains(PageDescriptor::FLAG_TAKEN);
             if !is_taken {
                 continue;
             }
             count_taken += 1;
             let pages_begin = *current_pages_begin.get_or_insert(page_end);
-            let is_last = descriptor.flags.contains(PageFlags::LAST);
+            let is_last = descriptor.contains(PageDescriptor::FLAG_LAST);
             if is_last {
                 current_pages_begin.take();
                 let addr_begin = unsafe { allocations.add(pages_begin * page_size) };
@@ -392,7 +338,7 @@ impl PageAllocator {
     /// Initialize the page allocator system.
     fn initialize(&mut self) {
         for descriptor in &mut self.descriptors {
-            descriptor.flags.clear();
+            descriptor.clear();
         }
     }
 
@@ -401,10 +347,9 @@ impl PageAllocator {
         assert!(pages > 0);
         let allocations = self.allocations.load(atomic::Ordering::Relaxed);
         self.find_free_pages(pages).map(|offset| unsafe {
-            (offset..offset + pages).for_each(|i| self.descriptors[i].flags.set(PageFlags::TAKEN));
-            self.descriptors[offset + pages - 1]
-                .flags
-                .set(PageFlags::LAST);
+            (offset..offset + pages)
+                .for_each(|i| self.descriptors[i].set(PageDescriptor::FLAG_TAKEN));
+            self.descriptors[offset + pages - 1].set(PageDescriptor::FLAG_LAST);
             // The PageDescriptor structures themselves aren't the useful memory.
             // Instead, there is 1 PageDescriptor structure per 4096 bytes.
             let page_size = 1usize << self.page_order;
@@ -439,21 +384,21 @@ impl PageAllocator {
         let page_offset = ptr.sub(allocations as usize) as usize;
 
         let mut page = page_offset / page_size;
-        while self.descriptors[page].flags.contains(PageFlags::TAKEN)
-            && !self.descriptors[page].flags.contains(PageFlags::LAST)
+        while self.descriptors[page].contains(PageDescriptor::FLAG_TAKEN)
+            && !self.descriptors[page].contains(PageDescriptor::FLAG_LAST)
         {
-            self.descriptors[page].flags.clear();
+            self.descriptors[page].clear();
             page += 1;
         }
         // If the following assertion fails, it is most likely
         // caused by a double-free.
         assert!(
-            self.descriptors[page].flags.contains(PageFlags::LAST),
+            self.descriptors[page].contains(PageDescriptor::FLAG_LAST),
             "Possible double-free detected! (Not taken found before last)"
         );
         // If we get here, we've taken care of all previous pages and
         // we are on the last page.
-        self.descriptors[page].flags.clear();
+        self.descriptors[page].clear();
     }
 
     /// Find a first address of a contiguous region of one or more free pages.
@@ -462,7 +407,7 @@ impl PageAllocator {
         // let descriptors = self.descriptors.load(atomic::Ordering::Relaxed);
         let mut current_pages_begin = None;
         for (pages_end, descriptor) in self.descriptors.into_iter().enumerate() {
-            let is_taken = descriptor.flags.contains(PageFlags::TAKEN);
+            let is_taken = descriptor.contains(PageDescriptor::FLAG_TAKEN);
             if is_taken {
                 current_pages_begin.take();
                 continue;
@@ -586,65 +531,33 @@ impl Iterator for PageDescriptorsIterMut {
 /// The page descriptor containing general information about physical memory pages.
 #[derive(Debug)]
 struct PageDescriptor {
-    flags: PageFlags,
+    flags: u8,
 }
 
-/// A 8-bit bitmask representing the state of a memory page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PageFlags(u8);
-
-impl PageFlags {
+impl PageDescriptor {
     /// Page has not been used.
-    const EMPTY: Self = Self(0);
+    const FLAG_EMPTY: u8 = 0;
     /// Page has been taken by the allocator.
-    const TAKEN: Self = Self(1 << 0);
+    const FLAG_TAKEN: u8 = 1 << 0;
     /// Page is the last one in the allocated pages.
-    const LAST: Self = Self(1 << 1);
+    const FLAG_LAST: u8 = 1 << 1;
 
     /// Enable the bit corresponding to the given page type.
-    fn set(&mut self, flags: Self) {
-        *self |= flags;
+    fn set(&mut self, flags: u8) {
+        self.flags |= flags;
     }
 
     /// Return true of the given flag is set.
-    fn contains(&self, flags: Self) -> bool {
-        if *self == PageFlags::EMPTY && flags == PageFlags::EMPTY {
+    fn contains(&self, flags: u8) -> bool {
+        if self.flags == Self::FLAG_EMPTY && flags == Self::FLAG_EMPTY {
             return true;
         }
-        *self & flags != PageFlags::EMPTY
+        self.flags & flags != Self::FLAG_EMPTY
     }
 
     /// Clear all previously set flags.
     fn clear(&mut self) {
-        *self = Self::EMPTY;
-    }
-}
-
-impl BitAnd for PageFlags {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        Self(self.0 & rhs.0)
-    }
-}
-
-impl BitAndAssign for PageFlags {
-    fn bitand_assign(&mut self, rhs: Self) {
-        self.0 &= rhs.0
-    }
-}
-
-impl BitOr for PageFlags {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        Self(self.0 | rhs.0)
-    }
-}
-
-impl BitOrAssign for PageFlags {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0
+        self.flags = Self::FLAG_EMPTY;
     }
 }
 
