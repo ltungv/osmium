@@ -51,7 +51,7 @@ pub struct UartDriver {
 impl Write for UartDriver {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         s.bytes().for_each(|b| {
-            while let None = unsafe { self.put(b) } {
+            while self.put(b).is_none() {
                 spin_loop();
             }
         });
@@ -60,7 +60,27 @@ impl Write for UartDriver {
 }
 
 impl UartDriver {
+    /// Create a global UART driver and initialize it with reasonable configurations.
+    /// This function calls to both `new` and `initialize` to get the global driver ready.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure that `base_address` points to the first address of the UART hardware in
+    /// physical memory
+    pub unsafe fn initialize_global(base_address: usize) {
+        UART_DRIVER.call_once(|| {
+            let driver = Self::new(base_address);
+            driver.initialize();
+            SpinMutex::new(driver)
+        });
+    }
+
     /// Create a new UART driver for the hardware at `base_address` in memory.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure that `base_address` points to the first address of the UART hardware in
+    /// physical memory
     pub unsafe fn new(base_address: usize) -> Self {
         let base_ptr = base_address as *mut u8;
         Self {
@@ -76,17 +96,8 @@ impl UartDriver {
         }
     }
 
-    /// Create a global UART driver and initialize it with reasonable configurations.
-    pub unsafe fn initialize_global(base_address: usize) {
-        UART_DRIVER.call_once(|| {
-            let driver = Self::new(base_address);
-            driver.initialize();
-            SpinMutex::new(driver)
-        });
-    }
-
     /// Initialize the UART hardware registers.
-    unsafe fn initialize(&self) {
+    fn initialize(&self) {
         let ier = self.ier.load(atomic::Ordering::Relaxed);
         let fcr = self.fcr.load(atomic::Ordering::Relaxed);
         let lcr = self.lcr.load(atomic::Ordering::Relaxed);
@@ -96,13 +107,6 @@ impl UartDriver {
 
         // We'll later restore LCR to this value after setting the divisor.
         let lcr_value = 1 << 1 | 1 << 0;
-
-        // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
-        fcr.write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
-        // Set data word length to 8 bits.
-        lcr.write_volatile(lcr_value);
-        // Enable receiver buffer interrupts.
-        ier.write_volatile(1 << 0);
 
         // Set the divisor from a global clock rate of 22.729 MHz (22,729,000 cycles per second) to a signaling rate
         // of 2400 (BAUD). The formula given in the NS16500A specification for calculating the divisor is:
@@ -115,39 +119,53 @@ impl UartDriver {
         let divisor_ls = divisor & 0xff;
         let divisor_ms = divisor >> 8;
 
-        // Enable DLAB.
-        lcr.write_volatile(lcr_value | 1 << 7);
-        // Set divisor least significant bits.
-        dll.write_volatile(divisor_ls as u8);
-        // Set divisor most significant bits.
-        dlm.write_volatile(divisor_ms as u8);
-        // Disable DLAB.
-        lcr.write_volatile(lcr_value);
+        unsafe {
+            // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
+            fcr.write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
+            // Set data word length to 8 bits.
+            lcr.write_volatile(lcr_value);
+            // Enable receiver buffer interrupts.
+            ier.write_volatile(1 << 0);
 
-        // Mark data terminal ready, and signal request to send.
-        mcr.write_volatile(1 << 1 | 1 << 0);
+            // Enable DLAB.
+            lcr.write_volatile(lcr_value | 1 << 7);
+            // Set divisor least significant bits.
+            dll.write_volatile(divisor_ls as u8);
+            // Set divisor most significant bits.
+            dlm.write_volatile(divisor_ms as u8);
+            // Disable DLAB.
+            lcr.write_volatile(lcr_value);
+
+            // Mark data terminal ready, and signal request to send.
+            mcr.write_volatile(1 << 1 | 1 << 0);
+        }
     }
 
     /// Put a byte into the Transmitter Holding Register (THR) blocking until the byte
     /// is ready to be sent.
-    pub unsafe fn put(&self, byte: u8) -> Option<()> {
+    pub fn put(&self, byte: u8) -> Option<()> {
         let thr = self.thr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
-        if lsr.read_volatile() & (1 << 6) == 0 {
-            None
-        } else {
-            Some(thr.write_volatile(byte))
+        unsafe {
+            if lsr.read_volatile() & (1 << 6) == 0 {
+                None
+            } else {
+                thr.write_volatile(byte);
+                Some(())
+            }
         }
     }
 
     /// Get the next available byte from the Receiver Buffer Register (RBR).
-    pub unsafe fn get(&self) -> Option<u8> {
+    pub fn get(&self) -> Option<u8> {
         let rbr = self.rbr.load(atomic::Ordering::Relaxed);
         let lsr = self.lsr.load(atomic::Ordering::Relaxed);
-        if lsr.read_volatile() & (1 << 0) == 0 {
-            None
-        } else {
-            Some(rbr.read_volatile())
+        unsafe {
+            if lsr.read_volatile() & (1 << 0) == 0 {
+                None
+            } else {
+                Some(rbr.read_volatile())
+            }
         }
     }
 }

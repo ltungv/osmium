@@ -164,5 +164,5 @@ extern "C" fn kinit() -> usize {
 #[no_mangle]
 extern "C" fn kmain() -> ! {
     // TODO: separate initialization and long running tasks
-    loop {}
+    todo!()
 }
