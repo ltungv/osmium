@@ -9,7 +9,7 @@ use crate::mmu::{
     MEMORY_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
 };
 use crate::{
-    mmu::{self, kmem, PageTableEntry, HEAP_SIZE, HEAP_START, PAGE_SIZE},
+    mmu::{self, kmem, PageTableEntry, PageTableError, HEAP_SIZE, HEAP_START, PAGE_SIZE},
     uart::{self, UART_BASE_ADDRESS},
 };
 use crate::{print, println};
@@ -44,147 +44,36 @@ extern "C" fn abort() -> ! {
 
 #[no_mangle]
 extern "C" fn kinit() -> usize {
-    unsafe {
-        uart::initialize();
-        mmu::initialize();
-        kmem::initialize(&mut mmu::page_allocator());
+    uart::initialize();
+    mmu::initialize();
+    kmem::initialize(&mut mmu::page_allocator());
 
-        #[cfg(debug_assertions)]
-        {
-            let (kmem_start, kmem_end) = {
-                let m = kmem::kmem();
-                let alloc_list = m.allocation_list();
-                (alloc_list.head(), alloc_list.tail())
-            };
-            println!();
-            println!("HEAP_START = 0x{:x}", HEAP_START);
-            println!("HEAP_SIZE = 0x{:x}", HEAP_SIZE);
-            println!("TEXT: 0x{:x} => 0x{:x}", TEXT_START, TEXT_END);
-            println!("DATA: 0x{:x} => 0x{:x}", DATA_START, DATA_END);
-            println!("RODATA: 0x{:x} => 0x{:x}", RODATA_START, RODATA_END);
-            println!("BSS: 0x{:x} => 0x{:x}", BSS_START, BSS_END);
-            println!(
-                "KERNEL_STACK: 0x{:x} => 0x{:x}",
-                KERNEL_STACK_START, KERNEL_STACK_END
-            );
-            println!("KERNEL_HEAP: 0x{:x} => 0x{:x}", kmem_start, kmem_end,);
-            println!("MEMORY: 0x{:x} => 0x{:x}", MEMORY_START, MEMORY_END);
-            println!();
-        }
+    #[cfg(debug_assertions)]
+    print_memory_layout();
 
-        {
-            let mut kernel_memory = kmem::kmem();
-            let (kmem_start, kmem_end) = {
-                let alloc_list = kernel_memory.allocation_list();
-                (alloc_list.head(), alloc_list.tail())
-            };
-            let mut page_allocator = mmu::page_allocator();
-            let root = &mut *kernel_memory.page_table_addr();
+    map_memory().unwrap();
 
-            root.id_map_range(
-                &mut page_allocator,
-                kmem_start,
-                kmem_end,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-
-            root.id_map_range(
-                &mut page_allocator,
-                HEAP_START,
-                HEAP_START + (HEAP_SIZE / PAGE_SIZE) * PAGE_SIZE,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-
-            root.id_map_range(
-                &mut page_allocator,
-                TEXT_START,
-                TEXT_END,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-
-            root.id_map_range(
-                &mut page_allocator,
-                RODATA_START,
-                RODATA_END,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-
-            root.id_map_range(
-                &mut page_allocator,
-                DATA_START,
-                DATA_END,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-
-            root.id_map_range(
-                &mut page_allocator,
-                BSS_START,
-                BSS_END,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-
-            root.id_map_range(
-                &mut page_allocator,
-                KERNEL_STACK_START,
-                KERNEL_STACK_END,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-
-            root.id_map_range(
-                &mut page_allocator,
-                UART_BASE_ADDRESS,
-                UART_BASE_ADDRESS,
-                PageTableEntry::READ | PageTableEntry::WRITE,
-            )
-            .unwrap();
-            println!("{:?}", page_allocator);
-        }
-
-        let root_alloc_table_addr = {
-            let mut kernel_memory = kmem::kmem();
-            let (kmem_start, kmem_end) = {
-                let alloc_list = kernel_memory.allocation_list();
-                (alloc_list.head(), alloc_list.tail())
-            };
-            let root_addr = kernel_memory.page_table_addr();
-            let root = &*root_addr;
-
-            let p = 0x8005_7000;
-            let m = root.v2p(p).unwrap_or(0);
-            println!("Walk 0x{:x} = 0x{:x}", p, m);
-
-            let p = kmem_start;
-            let m = root.v2p(p).unwrap_or(0);
-            println!("Walk 0x{:x} = 0x{:x}", p, m);
-
-            let p = kmem_end;
-            let m = root.v2p(p).unwrap_or(0);
-            println!("Walk 0x{:x} = 0x{:x}", p, m);
-
-            let p = UART_BASE_ADDRESS;
-            let m = root.v2p(p).unwrap_or(0);
-            println!("Walk 0x{:x} = 0x{:x}", p, m);
-
-            root_addr as usize
+    #[cfg(debug_assertions)]
+    {
+        let mut kernel_memory = kmem::kmem();
+        let (kmem_start, kmem_end) = {
+            let alloc_list = kernel_memory.allocation_list();
+            (alloc_list.head(), alloc_list.tail())
         };
 
-        // table / 4096    Sv39 mode
-        (root_alloc_table_addr >> 12) | (8 << 60)
-    }
+        let root_addr = kernel_memory.page_table_addr();
+        let root = unsafe { &*root_addr };
+        for vaddr in kmem_start..kmem_end {
+            let paddr = root.v2p(vaddr).unwrap_or(0);
+            assert!(vaddr == paddr);
+        }
+    };
+
+    let root_alloc_table_addr = {
+        let mut kernel_memory = kmem::kmem();
+        kernel_memory.page_table_addr() as usize
+    };
+    (root_alloc_table_addr >> 12) | (8 << 60)
 }
 
 #[no_mangle]
@@ -227,5 +116,100 @@ extern "C" fn kmain() -> ! {
             // Everything else
             _ => print!("{}", c as char),
         }
+    }
+}
+
+fn map_memory() -> Result<(), PageTableError> {
+    let mut kernel_memory = kmem::kmem();
+    let mut page_allocator = mmu::page_allocator();
+
+    let (kmem_start, kmem_end) = {
+        let alloc_list = kernel_memory.allocation_list();
+        (alloc_list.head(), alloc_list.tail())
+    };
+    let root = unsafe { &mut *kernel_memory.page_table_addr() };
+
+    root.id_map_range(
+        &mut page_allocator,
+        kmem_start,
+        kmem_end,
+        PageTableEntry::READ | PageTableEntry::WRITE,
+    )?;
+
+    root.id_map_range(
+        &mut page_allocator,
+        UART_BASE_ADDRESS,
+        UART_BASE_ADDRESS + 0x100,
+        PageTableEntry::READ | PageTableEntry::WRITE,
+    )?;
+
+    unsafe {
+        root.id_map_range(
+            &mut page_allocator,
+            HEAP_START,
+            HEAP_START + (HEAP_SIZE / PAGE_SIZE) * PAGE_SIZE,
+            PageTableEntry::READ | PageTableEntry::WRITE,
+        )?;
+
+        root.id_map_range(
+            &mut page_allocator,
+            TEXT_START,
+            TEXT_END,
+            PageTableEntry::READ | PageTableEntry::EXECUTE,
+        )?;
+
+        root.id_map_range(
+            &mut page_allocator,
+            RODATA_START,
+            RODATA_END,
+            PageTableEntry::READ | PageTableEntry::EXECUTE,
+        )?;
+
+        root.id_map_range(
+            &mut page_allocator,
+            DATA_START,
+            DATA_END,
+            PageTableEntry::READ | PageTableEntry::WRITE,
+        )?;
+
+        root.id_map_range(
+            &mut page_allocator,
+            BSS_START,
+            BSS_END,
+            PageTableEntry::READ | PageTableEntry::WRITE,
+        )?;
+
+        root.id_map_range(
+            &mut page_allocator,
+            KERNEL_STACK_START,
+            KERNEL_STACK_END,
+            PageTableEntry::READ | PageTableEntry::WRITE,
+        )?;
+    }
+
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn print_memory_layout() {
+    let kernel_mem = kmem::kmem();
+    let alloc_list = kernel_mem.allocation_list();
+    let kmem_start = alloc_list.head();
+    let kmem_end = alloc_list.tail();
+    unsafe {
+        println!();
+        println!("HEAP_START = 0x{:x}", HEAP_START);
+        println!("HEAP_SIZE = 0x{:x}", HEAP_SIZE);
+        println!("TEXT: 0x{:x} => 0x{:x}", TEXT_START, TEXT_END);
+        println!("DATA: 0x{:x} => 0x{:x}", DATA_START, DATA_END);
+        println!("RODATA: 0x{:x} => 0x{:x}", RODATA_START, RODATA_END);
+        println!("BSS: 0x{:x} => 0x{:x}", BSS_START, BSS_END);
+        println!(
+            "KERNEL_STACK: 0x{:x} => 0x{:x}",
+            KERNEL_STACK_START, KERNEL_STACK_END
+        );
+        println!("KERNEL_HEAP: 0x{:x} => 0x{:x}", kmem_start, kmem_end,);
+        println!("MEMORY: 0x{:x} => 0x{:x}", MEMORY_START, MEMORY_END);
+        println!();
     }
 }
