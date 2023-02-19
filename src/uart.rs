@@ -1,29 +1,17 @@
 //! This module contains the driver for the NS16550d UART hardware.
 
-use core::{
-    fmt::Write,
-    hint::spin_loop,
-    sync::atomic::{self, AtomicPtr},
-};
+use core::{fmt::Write, hint::spin_loop};
 
-use spin::mutex::SpinMutex;
-
-/// Default UART base address on the `virt` machine in QEMU.
-pub const QEMU_VIRT_UART_MMIO_ADDRESS: usize = 0x1000_0000;
-
-/// The global uart driver instance.
-pub static UART_DRIVER: spin::Once<SpinMutex<UartDriver>> = spin::Once::new();
+use spin::mutex::{SpinMutex, SpinMutexGuard};
 
 /// Print out using the global UART driver.
 #[macro_export]
 macro_rules! print {
-    ($($args:tt)+) => (
-        if let Some(driver) = $crate::uart::UART_DRIVER.get() {
-            use core::fmt::Write;
-            let mut driver = driver.lock();
-            let _ = write!(driver, $($args)+);
-        }
-    );
+    ($($args:tt)+) => ({
+        use core::fmt::Write;
+        let mut driver = $crate::uart::driver();
+        let _ = write!(driver, $($args)+);
+    });
 }
 
 /// Print out with a new line using the global UART driver.
@@ -34,77 +22,53 @@ macro_rules! println {
     ($fmt:expr, $($args:tt)+) => ($crate::print!(concat!($fmt, "\r\n"), $($args)+));
 }
 
+/// Default UART base address on the `virt` machine in QEMU.
+pub const UART_BASE_ADDRESS: usize = 0x1000_0000;
+
+/// The global uart driver instance.
+static UART_DRIVER: SpinMutex<UartDriver> = SpinMutex::new(UartDriver(UART_BASE_ADDRESS));
+
+/// Acquire unique access to the global UART driver.
+pub fn driver() -> SpinMutexGuard<'static, UartDriver> {
+    UART_DRIVER.lock()
+}
+
+/// Initialize the global UART driver state.
+pub fn initialize() {
+    UART_DRIVER.lock().initialize();
+}
+
 /// A driver for PC16550D (Universal Asynchronous Receiver/Transmitter With FIFOs).
 #[derive(Debug)]
-pub struct UartDriver {
-    rbr: AtomicPtr<u8>,
-    thr: AtomicPtr<u8>,
-    ier: AtomicPtr<u8>,
-    fcr: AtomicPtr<u8>,
-    lcr: AtomicPtr<u8>,
-    mcr: AtomicPtr<u8>,
-    lsr: AtomicPtr<u8>,
-    dll: AtomicPtr<u8>,
-    dlm: AtomicPtr<u8>,
-}
-
-impl Write for UartDriver {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        s.bytes().for_each(|b| {
-            while self.put(b).is_none() {
-                spin_loop();
-            }
-        });
-        Ok(())
-    }
-}
+pub struct UartDriver(usize);
 
 impl UartDriver {
-    /// Create a global UART driver and initialize it with reasonable configurations.
-    /// This function calls to both `new` and `initialize` to get the global driver ready.
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure that `base_address` points to the first address of the UART hardware in
-    /// physical memory
-    pub unsafe fn initialize_global(base_address: usize) {
-        UART_DRIVER.call_once(|| {
-            let driver = Self::new(base_address);
-            driver.initialize();
-            SpinMutex::new(driver)
-        });
+    /// Put a byte into the Transmitter Holding Register (THR) blocking until the byte
+    /// is ready to be sent.
+    pub fn put(&self, byte: u8) -> Option<()> {
+        unsafe {
+            if self.lsr().read_volatile() & (1 << 6) == 0 {
+                None
+            } else {
+                self.thr().write_volatile(byte);
+                Some(())
+            }
+        }
     }
 
-    /// Create a new UART driver for the hardware at `base_address` in memory.
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure that `base_address` points to the first address of the UART hardware in
-    /// physical memory
-    pub unsafe fn new(base_address: usize) -> Self {
-        let base_ptr = base_address as *mut u8;
-        Self {
-            rbr: AtomicPtr::new(base_ptr.add(0)),
-            thr: AtomicPtr::new(base_ptr.add(0)),
-            ier: AtomicPtr::new(base_ptr.add(1)),
-            fcr: AtomicPtr::new(base_ptr.add(2)),
-            lcr: AtomicPtr::new(base_ptr.add(3)),
-            mcr: AtomicPtr::new(base_ptr.add(4)),
-            lsr: AtomicPtr::new(base_ptr.add(5)),
-            dll: AtomicPtr::new(base_ptr.add(0)),
-            dlm: AtomicPtr::new(base_ptr.add(1)),
+    /// Get the next available byte from the Receiver Buffer Register (RBR).
+    pub fn get(&self) -> Option<u8> {
+        unsafe {
+            if self.lsr().read_volatile() & (1 << 0) == 0 {
+                None
+            } else {
+                Some(self.rbr().read_volatile())
+            }
         }
     }
 
     /// Initialize the UART hardware registers.
     fn initialize(&self) {
-        let ier = self.ier.load(atomic::Ordering::Relaxed);
-        let fcr = self.fcr.load(atomic::Ordering::Relaxed);
-        let lcr = self.lcr.load(atomic::Ordering::Relaxed);
-        let mcr = self.mcr.load(atomic::Ordering::Relaxed);
-        let dll = self.dll.load(atomic::Ordering::Relaxed);
-        let dlm = self.dlm.load(atomic::Ordering::Relaxed);
-
         // We'll later restore LCR to this value after setting the divisor.
         let lcr_value = 1 << 1 | 1 << 0;
 
@@ -121,51 +85,69 @@ impl UartDriver {
 
         unsafe {
             // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
-            fcr.write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
+            self.fcr()
+                .write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
             // Set data word length to 8 bits.
-            lcr.write_volatile(lcr_value);
+            self.lcr().write_volatile(lcr_value);
             // Enable receiver buffer interrupts.
-            ier.write_volatile(1 << 0);
-
+            self.ier().write_volatile(1 << 0);
             // Enable DLAB.
-            lcr.write_volatile(lcr_value | 1 << 7);
+            self.lcr().write_volatile(lcr_value | 1 << 7);
             // Set divisor least significant bits.
-            dll.write_volatile(divisor_ls as u8);
+            self.dll().write_volatile(divisor_ls as u8);
             // Set divisor most significant bits.
-            dlm.write_volatile(divisor_ms as u8);
+            self.dlm().write_volatile(divisor_ms as u8);
             // Disable DLAB.
-            lcr.write_volatile(lcr_value);
-
+            self.lcr().write_volatile(lcr_value);
             // Mark data terminal ready, and signal request to send.
-            mcr.write_volatile(1 << 1 | 1 << 0);
+            self.mcr().write_volatile(1 << 1 | 1 << 0);
         }
     }
 
-    /// Put a byte into the Transmitter Holding Register (THR) blocking until the byte
-    /// is ready to be sent.
-    pub fn put(&self, byte: u8) -> Option<()> {
-        let thr = self.thr.load(atomic::Ordering::Relaxed);
-        let lsr = self.lsr.load(atomic::Ordering::Relaxed);
-        unsafe {
-            if lsr.read_volatile() & (1 << 6) == 0 {
-                None
-            } else {
-                thr.write_volatile(byte);
-                Some(())
-            }
-        }
+    fn rbr(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(0) }
     }
 
-    /// Get the next available byte from the Receiver Buffer Register (RBR).
-    pub fn get(&self) -> Option<u8> {
-        let rbr = self.rbr.load(atomic::Ordering::Relaxed);
-        let lsr = self.lsr.load(atomic::Ordering::Relaxed);
-        unsafe {
-            if lsr.read_volatile() & (1 << 0) == 0 {
-                None
-            } else {
-                Some(rbr.read_volatile())
+    fn thr(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(0) }
+    }
+
+    fn dll(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(0) }
+    }
+
+    fn ier(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(1) }
+    }
+
+    fn dlm(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(1) }
+    }
+
+    fn fcr(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(2) }
+    }
+
+    fn lcr(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(3) }
+    }
+
+    fn mcr(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(4) }
+    }
+
+    fn lsr(&self) -> *mut u8 {
+        unsafe { (self.0 as *mut u8).add(5) }
+    }
+}
+
+impl Write for UartDriver {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        s.bytes().for_each(|b| {
+            while self.put(b).is_none() {
+                spin_loop();
             }
-        }
+        });
+        Ok(())
     }
 }
