@@ -227,6 +227,10 @@ impl PageTableEntry {
     pub const EXECUTE: i64 = 1 << 3;
     /// Bit flag for a readable-writeable-executeable entry.
     pub const RWX: i64 = Self::READ | Self::WRITE | Self::EXECUTE;
+    /// Bit flag for a readable-writeable entry.
+    pub const RW: i64 = Self::READ | Self::WRITE;
+    /// Bit flag for a readable-executeable entry.
+    pub const RX: i64 = Self::READ | Self::EXECUTE;
 
     fn get(&self) -> i64 {
         self.0

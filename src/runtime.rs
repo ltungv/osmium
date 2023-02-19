@@ -47,27 +47,13 @@ extern "C" fn kinit() -> usize {
     uart::initialize();
     mmu::initialize();
     kmem::initialize(&mut mmu::page_allocator());
-
-    #[cfg(debug_assertions)]
-    print_memory_layout();
-
     map_memory().unwrap();
 
     #[cfg(debug_assertions)]
     {
-        let mut kernel_memory = kmem::kmem();
-        let (kmem_start, kmem_end) = {
-            let alloc_list = kernel_memory.allocation_list();
-            (alloc_list.head(), alloc_list.tail())
-        };
-
-        let root_addr = kernel_memory.page_table_addr();
-        let root = unsafe { &*root_addr };
-        for vaddr in kmem_start..kmem_end {
-            let paddr = root.v2p(vaddr).unwrap_or(0);
-            assert!(vaddr == paddr);
-        }
-    };
+        print_memory_layout();
+        verify_identity_memory_layout();
+    }
 
     let root_alloc_table_addr = {
         let mut kernel_memory = kmem::kmem();
@@ -133,61 +119,86 @@ fn map_memory() -> Result<(), PageTableError> {
         &mut page_allocator,
         kmem_start,
         kmem_end,
-        PageTableEntry::READ | PageTableEntry::WRITE,
+        PageTableEntry::RW,
     )?;
-
     root.id_map_range(
         &mut page_allocator,
         UART_BASE_ADDRESS,
         UART_BASE_ADDRESS + 0x100,
-        PageTableEntry::READ | PageTableEntry::WRITE,
+        PageTableEntry::RW,
     )?;
-
     unsafe {
         root.id_map_range(
             &mut page_allocator,
             HEAP_START,
             HEAP_START + (HEAP_SIZE / PAGE_SIZE) * PAGE_SIZE,
-            PageTableEntry::READ | PageTableEntry::WRITE,
+            PageTableEntry::RW,
         )?;
 
         root.id_map_range(
             &mut page_allocator,
             TEXT_START,
             TEXT_END,
-            PageTableEntry::READ | PageTableEntry::EXECUTE,
+            PageTableEntry::RX,
         )?;
 
         root.id_map_range(
             &mut page_allocator,
             RODATA_START,
             RODATA_END,
-            PageTableEntry::READ | PageTableEntry::EXECUTE,
+            PageTableEntry::RX,
         )?;
 
         root.id_map_range(
             &mut page_allocator,
             DATA_START,
             DATA_END,
-            PageTableEntry::READ | PageTableEntry::WRITE,
+            PageTableEntry::RW,
         )?;
 
-        root.id_map_range(
-            &mut page_allocator,
-            BSS_START,
-            BSS_END,
-            PageTableEntry::READ | PageTableEntry::WRITE,
-        )?;
+        root.id_map_range(&mut page_allocator, BSS_START, BSS_END, PageTableEntry::RW)?;
 
         root.id_map_range(
             &mut page_allocator,
             KERNEL_STACK_START,
             KERNEL_STACK_END,
-            PageTableEntry::READ | PageTableEntry::WRITE,
+            PageTableEntry::RW,
         )?;
     }
-
     Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn verify_identity_memory_layout_range(start: usize, end: usize) {
+    let mut kernel_memory = kmem::kmem();
+    let root_addr = kernel_memory.page_table_addr();
+    let root = unsafe { &*root_addr };
+    for vaddr in start..end {
+        let paddr = root.v2p(vaddr).unwrap_or(0);
+        assert_eq!(vaddr, paddr, "{vaddr:x} != {paddr:x}");
+    }
+}
+
+#[cfg(debug_assertions)]
+fn verify_identity_memory_layout() {
+    let (kmem_start, kmem_end) = {
+        let kernel_memory = kmem::kmem();
+        let alloc_list = kernel_memory.allocation_list();
+        (alloc_list.head(), alloc_list.tail())
+    };
+    unsafe {
+        verify_identity_memory_layout_range(kmem_start, kmem_end);
+        verify_identity_memory_layout_range(UART_BASE_ADDRESS, UART_BASE_ADDRESS + 0x100);
+        verify_identity_memory_layout_range(
+            HEAP_START,
+            HEAP_START + (HEAP_SIZE / PAGE_SIZE) * PAGE_SIZE,
+        );
+        verify_identity_memory_layout_range(TEXT_START, TEXT_END);
+        verify_identity_memory_layout_range(RODATA_START, RODATA_END);
+        verify_identity_memory_layout_range(DATA_START, DATA_END);
+        verify_identity_memory_layout_range(BSS_START, BSS_END);
+        verify_identity_memory_layout_range(KERNEL_STACK_START, KERNEL_STACK_END);
+    }
 }
 
 #[cfg(debug_assertions)]
