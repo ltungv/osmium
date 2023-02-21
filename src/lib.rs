@@ -11,9 +11,9 @@
 )]
 #![feature(panic_info_message, alloc_error_handler)]
 
-pub mod mmu;
+pub mod driver;
+pub mod mem;
 pub mod runtime;
-pub mod uart;
 
 /// Aligns (set to a multiple of some power of two) and always rounds up.
 /// This takes an order which is the exponent to 2^order, therefore,

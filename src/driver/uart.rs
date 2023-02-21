@@ -9,7 +9,7 @@ use spin::mutex::{SpinMutex, SpinMutexGuard};
 macro_rules! print {
     ($($args:tt)+) => ({
         use core::fmt::Write;
-        let mut driver = $crate::uart::driver();
+        let mut driver = $crate::driver::uart::driver();
         let _ = write!(driver, $($args)+);
     });
 }

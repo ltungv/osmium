@@ -1,6 +1,6 @@
 //! This module contains the implementation of the Memory Management Unit.
 
-pub mod kmem;
+pub mod alloc;
 
 use core::{
     fmt::{self, Display},

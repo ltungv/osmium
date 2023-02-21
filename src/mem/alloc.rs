@@ -11,7 +11,7 @@ use spin::mutex::{SpinMutex, SpinMutexGuard};
 
 use crate::{
     align_value,
-    mmu::{PageTable, PAGE_SIZE},
+    mem::{PageTable, PAGE_SIZE},
 };
 
 use super::PageAllocator;

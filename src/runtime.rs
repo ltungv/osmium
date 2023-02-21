@@ -3,12 +3,12 @@
 use core::{arch::asm, panic::PanicInfo};
 
 use crate::{
-    mmu::{
-        self, kmem, PageTableEntry, PageTableError, BSS_END, BSS_START, DATA_END, DATA_START,
+    driver::uart::{self, UART_BASE_ADDRESS},
+    mem::{
+        self, alloc, PageTableEntry, PageTableError, BSS_END, BSS_START, DATA_END, DATA_START,
         HEAP_SIZE, HEAP_START, KERNEL_STACK_END, KERNEL_STACK_START, MEMORY_END, MEMORY_START,
         PAGE_SIZE, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
     },
-    uart::{self, UART_BASE_ADDRESS},
 };
 use crate::{print, println};
 
@@ -43,15 +43,15 @@ extern "C" fn abort() -> ! {
 #[no_mangle]
 extern "C" fn kinit() -> usize {
     uart::initialize();
-    mmu::initialize();
-    kmem::initialize(&mut mmu::page_allocator());
+    mem::initialize();
+    alloc::initialize(&mut mem::page_allocator());
     map_memory().unwrap();
 
     #[cfg(debug_assertions)]
     print_memory_layout();
 
     let root_alloc_table_addr = {
-        let mut kernel_memory = kmem::kmem();
+        let mut kernel_memory = alloc::kmem();
         kernel_memory.page_table_addr() as usize
     };
     (root_alloc_table_addr >> 12) | (8 << 60)
@@ -101,8 +101,8 @@ extern "C" fn kmain() -> ! {
 }
 
 fn map_memory() -> Result<(), PageTableError> {
-    let mut kernel_memory = kmem::kmem();
-    let mut page_allocator = mmu::page_allocator();
+    let mut kernel_memory = alloc::kmem();
+    let mut page_allocator = mem::page_allocator();
 
     let (kmem_start, kmem_end) = {
         let alloc_list = kernel_memory.allocation_list();
@@ -165,7 +165,7 @@ fn map_memory() -> Result<(), PageTableError> {
 
 #[cfg(debug_assertions)]
 fn print_memory_layout() {
-    let kernel_mem = kmem::kmem();
+    let kernel_mem = alloc::kmem();
     let alloc_list = kernel_mem.allocation_list();
     let kmem_start = alloc_list.head();
     let kmem_end = alloc_list.tail();
