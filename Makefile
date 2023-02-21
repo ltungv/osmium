@@ -9,7 +9,9 @@ LINKER_SCRIPT=-Tsrc/lds/virt.lds
 RUST_PROFILE=dev
 ifeq ($(RUST_PROFILE),dev)
 	RUST_TARGET=./target/riscv64gc-unknown-none-elf/debug
+	BUILD_CMD=cargo build
 else
+	BUILD_CMD=cargo build --$(RUST_PROFILE)
 	RUST_TARGET=./target/riscv64gc-unknown-none-elf/$(RUST_PROFILE)
 endif
 LIBS=-L$(RUST_TARGET)
@@ -28,7 +30,7 @@ MEM=128M
 DRIVE=hdd.dsk
 
 all:
-	cargo build
+	$(BUILD_CMD)
 	$(CC) $(CFLAGS) $(LINKER_SCRIPT) $(SOURCES_ASM) $(LIBS) $(LIB) -o $(OUT)
 
 run: all

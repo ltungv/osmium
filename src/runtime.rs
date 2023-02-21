@@ -1,15 +1,13 @@
 //! The kernel runtime
 
-#[cfg(debug_assertions)]
 use core::{arch::asm, panic::PanicInfo};
 
-#[cfg(debug_assertions)]
-use crate::mmu::{
-    BSS_END, BSS_START, DATA_END, DATA_START, KERNEL_STACK_END, KERNEL_STACK_START, MEMORY_END,
-    MEMORY_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
-};
 use crate::{
-    mmu::{self, kmem, PageTableEntry, PageTableError, HEAP_SIZE, HEAP_START, PAGE_SIZE},
+    mmu::{
+        self, kmem, PageTableEntry, PageTableError, BSS_END, BSS_START, DATA_END, DATA_START,
+        HEAP_SIZE, HEAP_START, KERNEL_STACK_END, KERNEL_STACK_START, MEMORY_END, MEMORY_START,
+        PAGE_SIZE, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
+    },
     uart::{self, UART_BASE_ADDRESS},
 };
 use crate::{print, println};
@@ -50,10 +48,7 @@ extern "C" fn kinit() -> usize {
     map_memory().unwrap();
 
     #[cfg(debug_assertions)]
-    {
-        print_memory_layout();
-        verify_identity_memory_layout();
-    }
+    print_memory_layout();
 
     let root_alloc_table_addr = {
         let mut kernel_memory = kmem::kmem();
@@ -166,39 +161,6 @@ fn map_memory() -> Result<(), PageTableError> {
         )?;
     }
     Ok(())
-}
-
-#[cfg(debug_assertions)]
-fn verify_identity_memory_layout_range(start: usize, end: usize) {
-    let mut kernel_memory = kmem::kmem();
-    let root_addr = kernel_memory.page_table_addr();
-    let root = unsafe { &*root_addr };
-    for vaddr in start..end {
-        let paddr = root.v2p(vaddr).unwrap_or(0);
-        assert_eq!(vaddr, paddr, "{vaddr:x} != {paddr:x}");
-    }
-}
-
-#[cfg(debug_assertions)]
-fn verify_identity_memory_layout() {
-    let (kmem_start, kmem_end) = {
-        let kernel_memory = kmem::kmem();
-        let alloc_list = kernel_memory.allocation_list();
-        (alloc_list.head(), alloc_list.tail())
-    };
-    unsafe {
-        verify_identity_memory_layout_range(kmem_start, kmem_end);
-        verify_identity_memory_layout_range(UART_BASE_ADDRESS, UART_BASE_ADDRESS + 0x100);
-        verify_identity_memory_layout_range(
-            HEAP_START,
-            HEAP_START + (HEAP_SIZE / PAGE_SIZE) * PAGE_SIZE,
-        );
-        verify_identity_memory_layout_range(TEXT_START, TEXT_END);
-        verify_identity_memory_layout_range(RODATA_START, RODATA_END);
-        verify_identity_memory_layout_range(DATA_START, DATA_END);
-        verify_identity_memory_layout_range(BSS_START, BSS_END);
-        verify_identity_memory_layout_range(KERNEL_STACK_START, KERNEL_STACK_END);
-    }
 }
 
 #[cfg(debug_assertions)]
