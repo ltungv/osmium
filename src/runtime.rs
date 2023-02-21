@@ -126,7 +126,7 @@ fn map_memory() -> Result<(), PageTableError> {
         root.id_map_range(
             &mut page_allocator,
             HEAP_START,
-            HEAP_START + (HEAP_SIZE / PAGE_SIZE) * PAGE_SIZE,
+            HEAP_START + HEAP_SIZE / PAGE_SIZE,
             PageTableEntry::RW,
         )?;
 
