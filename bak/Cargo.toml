@@ -1,0 +1,13 @@
+[package]
+name = "osmium"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "osmium"
+crate-type = ["staticlib"]
+test = false
+bench = false
+
+[dependencies]
+spin = "0.9"
