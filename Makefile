@@ -39,6 +39,7 @@ run: all
 	-m $(MEM) \
 	-cpu $(CPU) \
 	-smp $(CPUS) \
+	-echr 2 \
 	-nographic \
 	-serial mon:stdio \
 	-bios none \
@@ -52,6 +53,7 @@ dbg: all
 	-m $(MEM) \
 	-cpu $(CPU) \
 	-smp $(CPUS) \
+	-echr 2 \
 	-nographic \
 	-serial mon:stdio \
 	-bios none \

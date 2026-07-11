@@ -10,6 +10,7 @@ qemu-system-riscv64 \
 -m 128M \
 -cpu rv64 \
 -smp 4 \
+-echr 2 \
 -nographic \
 -serial mon:stdio \
 -drive if=none,format=raw,file=hdd.dsk,id=foo \
