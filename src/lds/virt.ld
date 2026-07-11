@@ -1,43 +1,27 @@
-/* 
- * linker script for outputting to risc-v qemu "virt" machine.
- *
- */
+/* linker script for risc-v qemu "virt" machine. */
 
-/* 
- * set risc-v as the architecture.
- *
- */
+/* set risc-v as the architecture. */
 OUTPUT_ARCH(riscv)
 
-/* 
- * set the entry point to the `_start` symbol located inside `boot.s`.
- *
- */
+/* set _start as the entry point. */
 ENTRY(_start)
 
 
-/* 
- * the memory section tells that there's a "ram" containing a section that is:
+/* a single 128M "ram" section that is:
  * - 'w': writeable
  * - 'x': executable
  * - 'a': allocatable
  * - '!r': not read-only
  * - '!i': not initialized
- *
- * there's 128 megabytes of ram available.
- *
  */
 MEMORY {
 	ram (wxa!ri) : ORIGIN = 0x80000000, LENGTH = 128M
 }
 
-/* phdrs is short for "program headers":
+/* 3 programs header that will be loaded directly from file into memory:
  * - text: cpu instructions (executable sections)
  * - data: global, initialized variables
  * - bss: global, uninitialized variables (all will be set to 0 by boot.s)
- *
- * pt_load tells the linker that theses sections will be loaded from file into memory.
- *
  */
 PHDRS {
 	text PT_LOAD;
