@@ -1,5 +1,8 @@
 # assembly-level trap handler.
 
+########################
+# CPU instructions
+########################
 .section .text
 
 .global asm_trap_vector

@@ -1,9 +1,10 @@
-//! this module contains the driver for the ns16550d uart hardware.
+//! driver for the ns16550d uart hardware.
 
 use core::{fmt::Write, hint::spin_loop};
 
 use spin::mutex::{SpinMutex, SpinMutexGuard};
 
+/// print to a monitor using uart.
 #[macro_export]
 macro_rules! print {
     ($($args:tt)*) => {{
@@ -14,6 +15,7 @@ macro_rules! print {
     }};
 }
 
+/// print to a monitor using uart, with a newline.
 #[macro_export]
 macro_rules! println {
     () => (print!("\r\n"));
@@ -21,9 +23,9 @@ macro_rules! println {
 }
 
 /// default uart base address on the `virt` machine in qemu.
-pub const UART_BASE_ADDRESS: usize = 0x1000_0000;
+const UART_BASE_ADDRESS: usize = 0x1000_0000;
 
-/// the global uart driver instance.
+/// global uart driver instance.
 static UART_DRIVER: SpinMutex<UartDriver> = SpinMutex::new(UartDriver(UART_BASE_ADDRESS));
 
 /// acquire unique access to the global uart driver.
@@ -41,8 +43,8 @@ pub fn initialize() {
 pub struct UartDriver(usize);
 
 impl UartDriver {
-    /// put a byte into the transmitter holding register (thr) blocking until the byte
-    /// is ready to be sent.
+    /// put a byte into the transmitter holding register (thr)
+    /// blocking until the byte is ready to be sent.
     pub fn put(&self, byte: u8) -> Option<()> {
         unsafe {
             if self.lsr().read_volatile() & (1 << 6) == 0 {
@@ -70,8 +72,9 @@ impl UartDriver {
         // we'll later restore lcr to this value after setting the divisor.
         let lcr_value = 1 << 1 | 1 << 0;
 
-        // set the divisor from a global clock rate of 22.729 mhz (22,729,000 cycles per second) to a signaling rate
-        // of 2400 (baud). the formula given in the ns16500a specification for calculating the divisor is:
+        // set the divisor from a global clock rate of 22.729 mhz (22,729,000 cycles per second)
+        // to a signaling rate of 2400 (baud). the formula given in the ns16500a specification
+        // for calculating the divisor is:
         // divisor = ceil((clock_hz) / (baud_sps x 16))
         // divisor = ceil(22_729_000 / (2400 x 16))
         // divisor = ceil(22_729_000 / 38_400)
