@@ -1,12 +1,12 @@
-# assembly-level trap handler.
+# Assembly-level trap handler.
 
 ########################
-# CPU instructions
+# CPU INSTRUCTIONS
 ########################
 .section .text
 
 .global asm_trap_vector
 asm_trap_vector:
-  # get here when the cpu is interrupted.
+  # Get here when the cpu is interrupted.
   mret
 

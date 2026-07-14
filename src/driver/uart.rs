@@ -1,10 +1,10 @@
-//! driver for the ns16550d uart hardware.
+//! Driver for the NS16550D UART hardware.
 
 use core::{fmt::Write, hint::spin_loop};
 
 use spin::mutex::{SpinMutex, SpinMutexGuard};
 
-/// print to a monitor using uart.
+/// Print to a monitor using UART.
 #[macro_export]
 macro_rules! print {
     ($($args:tt)*) => {{
@@ -15,36 +15,35 @@ macro_rules! print {
     }};
 }
 
-/// print to a monitor using uart, with a newline.
+/// Print to a monitor using uart, with a newline.
 #[macro_export]
 macro_rules! println {
     () => (print!("\r\n"));
     ($($arg:tt)*) => (print!("{}\r\n", format_args!($($arg)*)));
 }
 
-/// default uart base address on the `virt` machine in qemu.
-const UART_BASE_ADDRESS: usize = 0x1000_0000;
+/// Default UART base address on the `virt` machine in QEMU.
+const BASE_ADDRESS: usize = 0x1000_0000;
 
-/// global uart driver instance.
-static UART_DRIVER: SpinMutex<UartDriver> = SpinMutex::new(UartDriver(UART_BASE_ADDRESS));
+/// Global UART driver instance.
+static DRIVER: SpinMutex<UartDriver> = SpinMutex::new(UartDriver(BASE_ADDRESS));
 
-/// acquire unique access to the global uart driver.
+/// Acquire unique access to the global UART driver.
 pub fn driver() -> SpinMutexGuard<'static, UartDriver> {
-    UART_DRIVER.lock()
+    DRIVER.lock()
 }
 
-/// initialize the global uart driver state.
+/// Initialize the global uart driver state.
 pub fn initialize() {
-    UART_DRIVER.lock().initialize();
+    DRIVER.lock().initialize();
 }
 
-/// a driver for pc16550d (universal asynchronous receiver/transmitter with fifos).
+/// A driver for NS16550D (Universal Asynchronous Receiver/Transmitter with FIFOs).
 #[derive(Debug)]
 pub struct UartDriver(usize);
 
 impl UartDriver {
-    /// put a byte into the transmitter holding register (thr)
-    /// blocking until the byte is ready to be sent.
+    /// Put a byte into the transmitter holding register (thr) blocking until the byte is ready to be sent.
     pub fn put(&self, byte: u8) -> Option<()> {
         unsafe {
             if self.lsr().read_volatile() & (1 << 6) == 0 {
@@ -56,7 +55,7 @@ impl UartDriver {
         }
     }
 
-    /// get the next available byte from the receiver buffer register (rbr).
+    /// Get the next available byte from the receiver buffer register (rbr).
     pub fn get(&self) -> Option<u8> {
         unsafe {
             if self.lsr().read_volatile() & (1 << 0) == 0 {
@@ -67,13 +66,13 @@ impl UartDriver {
         }
     }
 
-    /// initialize the uart hardware registers.
+    /// Initialize the UART hardware registers.
     fn initialize(&self) {
-        // we'll later restore lcr to this value after setting the divisor.
+        // We'll later restore lcr to this value after setting the divisor.
         let lcr_value = 1 << 1 | 1 << 0;
 
-        // set the divisor from a global clock rate of 22.729 mhz (22,729,000 cycles per second)
-        // to a signaling rate of 2400 (baud). the formula given in the ns16500a specification
+        // Set the divisor from a global clock rate of 22.729 mhz (22,729,000 cycles per second)
+        // to a signaling rate of 2400 (baud). The formula given in the ns16500a specification
         // for calculating the divisor is:
         // divisor = ceil((clock_hz) / (baud_sps x 16))
         // divisor = ceil(22_729_000 / (2400 x 16))
@@ -85,22 +84,22 @@ impl UartDriver {
         let divisor_ms = divisor >> 8;
 
         unsafe {
-            // enable fifo, clear tx/rx queues, and set interrupt watermark at 14 bytes.
+            // Enable fifo, clear tx/rx queues, and set interrupt watermark at 14 bytes.
             self.fcr()
                 .write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
-            // set data word length to 8 bits.
+            // Set data word length to 8 bits.
             self.lcr().write_volatile(lcr_value);
-            // enable receiver buffer interrupts.
+            // Enable receiver buffer interrupts.
             self.ier().write_volatile(1 << 0);
-            // enable dlab.
+            // Enable dlab.
             self.lcr().write_volatile(lcr_value | 1 << 7);
-            // set divisor least significant bits.
+            // Set divisor least significant bits.
             self.dll().write_volatile(divisor_ls as u8);
-            // set divisor most significant bits.
+            // Set divisor most significant bits.
             self.dlm().write_volatile(divisor_ms as u8);
-            // disable dlab.
+            // Disable dlab.
             self.lcr().write_volatile(lcr_value);
-            // mark data terminal ready, and signal request to send.
+            // Mark data terminal ready, and signal request to send.
             self.mcr().write_volatile(1 << 1 | 1 << 0);
         }
     }

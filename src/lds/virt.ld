@@ -1,13 +1,13 @@
-/* linker script for risc-v qemu "virt" machine. */
+/* Linker script for risc-v qemu "virt" machine. */
 
-/* set risc-v as the architecture. */
+/* Set risc-v as the architecture. */
 OUTPUT_ARCH(riscv)
 
-/* set _start as the entry point. */
+/* Set _start as the entry point. */
 ENTRY(_start)
 
 
-/* a single 128M "ram" section that is:
+/* A single 128M "ram" section that is:
  * - 'w': writeable
  * - 'x': executable
  * - 'a': allocatable
@@ -19,7 +19,7 @@ MEMORY {
 }
 
 /* 3 programs header that will be loaded directly from file into memory:
- * - text: cpu instructions (executable sections)
+ * - text: CPU instructions (executable sections)
  * - data: global, initialized variables
  * - bss: global, uninitialized variables (all will be set to 0 by boot.s)
  */
@@ -29,8 +29,8 @@ PHDRS {
 	bss PT_LOAD;
 }
 
-/* the memory is organized based on which section it is in. in rust, we have:
- * - cpu instructions stored in `text`.
+/* The memory is organized based on which section it is in. in rust, we have:
+ * - CPU instructions stored in `text`.
  * - global constants stored in `rodata`.
  * - global initialized variables stored in `data`.
  * - global uninitialized variables stored in `bss`.

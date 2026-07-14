@@ -1,5 +1,5 @@
 ########################
-# Read-only DATA
+# READ-ONLY DATA
 ########################
 .section .rodata
 
