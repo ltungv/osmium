@@ -1,4 +1,4 @@
-//! a risc-v kernel.
+//! A RISC-V kernel.
 
 #![no_std]
 #![warn(
@@ -11,9 +11,6 @@
     rust_2024_compatibility
 )]
 
-/// hardware driver.
 pub mod driver;
-/// memory management.
-pub mod mem;
-/// system runtime.
+pub mod mm;
 pub mod rt;
