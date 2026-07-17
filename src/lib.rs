@@ -1,5 +1,6 @@
 //! A RISC-V kernel.
 
+#![feature(alloc_error_handler)]
 #![no_std]
 #![warn(
     clippy::all,
