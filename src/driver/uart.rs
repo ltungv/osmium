@@ -23,7 +23,7 @@ macro_rules! println {
 }
 
 /// Default UART base address on the `virt` machine in QEMU.
-const BASE_ADDRESS: usize = 0x1000_0000;
+pub const BASE_ADDRESS: usize = 0x1000_0000;
 
 /// Global UART driver instance.
 static DRIVER: SpinMutex<UartDriver> = SpinMutex::new(UartDriver(BASE_ADDRESS));
