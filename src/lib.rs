@@ -62,6 +62,7 @@ unsafe extern "C" {
     pub static MEMORY_END: usize;
 }
 
+/// Align a value to some exponent of two.
 pub const fn align_value(val: usize, order: usize) -> usize {
     assert!(order > 0);
     let o = (1usize << order) - 1;
