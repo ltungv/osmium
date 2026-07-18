@@ -14,7 +14,7 @@ use spin::{
 
 use crate::{
     align_value,
-    frame::{self, FRAME_SIZE},
+    frame::{self, FrameAllocator, FrameId},
     sv39::{PageTable, PhysAddr, VirtAddr},
 };
 
@@ -44,13 +44,15 @@ pub fn alloc_error(l: Layout) -> ! {
 /// Initialize the memory management system.
 pub fn initialize() {
     KMEM.call_once(|| {
-        SpinMutex::new(Allocator::new(frame::allocator()).expect("kernel memory is allocated"))
+        SpinMutex::new(
+            Allocator::new(frame::frame_allocator()).expect("kernel memory is allocated"),
+        )
     });
 }
 
 /// Get a reference to the kernel memory.
 pub fn kmem() -> SpinMutexGuard<'static, Allocator> {
-    KMEM.get().expect("kernel memory is initialized").lock()
+    KMEM.get().expect("initialized kernel memory").lock()
 }
 
 /// Metadata for a region of byte-level allocation.
@@ -212,28 +214,28 @@ impl Iterator for FreeAllocationListIterMut {
 #[derive(Debug)]
 pub struct Allocator {
     allocation_list: AllocationList,
-    page_table: AtomicPtr<PageTable>,
+    page_table_frame_id: FrameId,
 }
 
 impl Allocator {
     /// Initialize the kernel's memory.
-    pub fn new(page_allocator: &frame::Allocator) -> Option<Self> {
-        let kernel_pages_addr = page_allocator.zalloc(PAGE_COUNT)?;
-        let kernel_pages_ptr = kernel_pages_addr.as_ptr_mut::<u8>();
+    pub fn new(page_allocator: &FrameAllocator) -> Option<Self> {
+        let kmem_head = page_allocator.zalloc(PAGE_COUNT)?;
+        let kmem_tail = kmem_head + PAGE_COUNT + 1;
         let free_allocation = AllocationList {
-            head: AtomicPtr::new(kernel_pages_ptr),
-            tail: AtomicPtr::new(unsafe { kernel_pages_ptr.add(PAGE_COUNT * FRAME_SIZE) }),
+            head: AtomicPtr::new(kmem_head.addr() as *mut u8),
+            tail: AtomicPtr::new(kmem_tail.addr() as *mut u8),
         };
-        let page_table_addr = page_allocator.zalloc(1)?;
+        let page_table_frame_id = page_allocator.zalloc(1)?;
         Some(Self {
             allocation_list: free_allocation,
-            page_table: AtomicPtr::new(page_table_addr.as_ptr_mut::<PageTable>()),
+            page_table_frame_id,
         })
     }
 
     /// Get a reference to the root page table.
     pub fn page_table_addr(&self) -> *mut PageTable {
-        self.page_table.load(atomic::Ordering::Relaxed)
+        self.page_table_frame_id.addr() as *mut PageTable
     }
 
     /// Get a reference to the allocation list.
@@ -293,6 +295,7 @@ impl Allocator {
         self.coalesce();
     }
 
+    /// Translates a virtual memory address into a physical one.
     pub fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         let table = unsafe { &*self.page_table_addr() };
         table.virt2phys(vaddr)
