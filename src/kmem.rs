@@ -7,18 +7,27 @@ use core::{
     sync::atomic::{self, AtomicPtr},
 };
 
-use crate::mm::{
-    PAGE_SIZE, PhysAddr, VirtAddr, align_value, frame::FrameAllocator, kmem, page::Sv39PageTable,
+use spin::{
+    Once,
+    mutex::{SpinMutex, SpinMutexGuard},
+};
+
+use crate::{
+    align_value,
+    frame::{self, FRAME_SIZE},
+    sv39::{PageTable, PhysAddr, VirtAddr},
 };
 
 /// Number of pages used for the kernel memory.
-pub const KMEM_PAGES: usize = 64;
+pub const PAGE_COUNT: usize = 64;
+
+static KMEM: Once<SpinMutex<Allocator>> = Once::new();
 
 /// Technically, we don't need the {} at the end, but it
 /// reveals that we're creating a new structure and not just
 /// copying a value.
 #[global_allocator]
-static GA: OsGlobalAlloc = OsGlobalAlloc;
+static ALLOCATOR: OsGlobalAlloc = OsGlobalAlloc;
 
 /// If for some reason alloc() in the global allocator gets null_mut(),
 /// then we come here. This is a divergent function, so we call panic to
@@ -30,6 +39,18 @@ pub fn alloc_error(l: Layout) -> ! {
         l.size(),
         l.align()
     );
+}
+
+/// Initialize the memory management system.
+pub fn initialize() {
+    KMEM.call_once(|| {
+        SpinMutex::new(Allocator::new(frame::allocator()).expect("kernel memory is allocated"))
+    });
+}
+
+/// Get a reference to the kernel memory.
+pub fn kmem() -> SpinMutexGuard<'static, Allocator> {
+    KMEM.get().expect("kernel memory is initialized").lock()
 }
 
 /// Metadata for a region of byte-level allocation.
@@ -189,29 +210,29 @@ impl Iterator for FreeAllocationListIterMut {
 
 /// Metadata for the kernel's memory.
 #[derive(Debug)]
-pub struct KernelMemory {
+pub struct Allocator {
     allocation_list: AllocationList,
-    page_table: AtomicPtr<Sv39PageTable>,
+    page_table: AtomicPtr<PageTable>,
 }
 
-impl KernelMemory {
+impl Allocator {
     /// Initialize the kernel's memory.
-    pub fn new(page_allocator: &FrameAllocator) -> Option<Self> {
-        let kernel_pages_addr = page_allocator.zalloc(KMEM_PAGES)?;
+    pub fn new(page_allocator: &frame::Allocator) -> Option<Self> {
+        let kernel_pages_addr = page_allocator.zalloc(PAGE_COUNT)?;
         let kernel_pages_ptr = kernel_pages_addr.as_ptr_mut::<u8>();
         let free_allocation = AllocationList {
             head: AtomicPtr::new(kernel_pages_ptr),
-            tail: AtomicPtr::new(unsafe { kernel_pages_ptr.add(KMEM_PAGES * PAGE_SIZE) }),
+            tail: AtomicPtr::new(unsafe { kernel_pages_ptr.add(PAGE_COUNT * FRAME_SIZE) }),
         };
         let page_table_addr = page_allocator.zalloc(1)?;
         Some(Self {
             allocation_list: free_allocation,
-            page_table: AtomicPtr::new(page_table_addr.as_ptr_mut::<Sv39PageTable>()),
+            page_table: AtomicPtr::new(page_table_addr.as_ptr_mut::<PageTable>()),
         })
     }
 
     /// Get a reference to the root page table.
-    pub fn page_table_addr(&self) -> *mut Sv39PageTable {
+    pub fn page_table_addr(&self) -> *mut PageTable {
         self.page_table.load(atomic::Ordering::Relaxed)
     }
 
@@ -306,16 +327,12 @@ unsafe impl GlobalAlloc for OsGlobalAlloc {
         // We align to the next page size so that when
         // we divide by PAGE_SIZE, we get exactly the number
         // of pages necessary.
-        let mut kmem = kmem();
-        kmem.zalloc(layout.size()).unwrap();
-        todo!()
+        kmem().zalloc(layout.size()).unwrap()
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
         // We ignore layout since our allocator uses ptr_start -> last
         // to determine the span of an allocation.
-        let mut kmem = kmem();
-        kmem.dealloc(ptr);
-        todo!()
+        kmem().dealloc(ptr);
     }
 }
