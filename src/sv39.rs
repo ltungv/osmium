@@ -1,9 +1,10 @@
 //! Functions and types for managing virtual pages.
 
-use core::fmt;
+use core::{fmt, ops::Add};
 
 use crate::{
-    mm::{PAGE_ORDER, PAGE_SIZE, PhysAddr, VirtAddr, align_value, frame::FrameAllocator},
+    align_value,
+    frame::{self, FRAME_ORDER, FRAME_SIZE},
     print, println,
 };
 
@@ -29,16 +30,16 @@ impl fmt::Display for TableError {
 /// A 4096-byte struct containing entries that map virtual adresses to physical addresses.
 #[derive(Debug)]
 #[repr(C, align(4096))]
-pub struct Sv39PageTable([Sv39PageTableEntry; 512]);
+pub struct PageTable([TableEntry; 512]);
 
-impl Sv39PageTable {
+impl PageTable {
     /// Create a mapping between the given virtual address and physical address.
     pub fn map(
         &mut self,
-        page_allocator: &FrameAllocator,
+        frame_allocator: &frame::Allocator,
         vaddr: VirtAddr,
         paddr: PhysAddr,
-        flags: Sv39PageTableEntryFlags,
+        flags: EntryFlag,
         level: usize,
     ) -> Result<(), TableError> {
         // Make sure the read, write, and execute flags have been provided. Otherwise, we'll leak
@@ -48,8 +49,6 @@ impl Sv39PageTable {
         // Extract the virtual page numbers from the virtual address.
         let vpns = vaddr.vpns();
 
-        println!("mapping {} => {}", vaddr, paddr);
-
         // Assume the root page table is valid
         let mut entry = &mut self.0[vpns[2]];
         for vpn_next in vpns[level..2].iter().rev() {
@@ -57,38 +56,23 @@ impl Sv39PageTable {
                 // Allocate a 4096-byte page to contain to page table and mark the page entry as
                 // valid. Because every page is 4096-byte aligned, only the physical page number
                 // needs to be stored instead of the entire address.
-                let page = page_allocator.zalloc(1).ok_or(TableError::OutOfMemory)?;
-
+                let page = frame_allocator.zalloc(1).ok_or(TableError::OutOfMemory)?;
                 *entry = entry
                     .set_address(page)
-                    .set_flags(Sv39PageTableEntryFlags::default().set_valid(true));
-
-                println!(
-                    "{:b} == {:b} => {}",
-                    entry.get_address(),
-                    page.0,
-                    entry.get_address() == page.0
-                );
+                    .set_flags(EntryFlag::default().set_valid(true));
             }
 
             // Go to the next entry.
-            let table = entry.get_address() as *mut Sv39PageTable;
+            let table = entry.get_address() as *mut PageTable;
             entry = unsafe { &mut (*table).0[*vpn_next] };
         }
 
         *entry = entry.set_address(paddr).set_flags(flags.set_valid(true));
-        println!(
-            "{:b} == {:b} => {}",
-            entry.get_address(),
-            paddr.0,
-            entry.get_address() == paddr.0
-        );
-
         Ok(())
     }
 
     /// Unmap the page table.
-    pub fn unmap(&mut self, page_allocator: &mut FrameAllocator) -> Result<(), TableError> {
+    pub fn unmap(&mut self, frame_allocator: &mut frame::Allocator) -> Result<(), TableError> {
         for entry_lvl2 in self.0.iter() {
             let entry_lvl2_flags = entry_lvl2.get_flags();
             if !entry_lvl2_flags.is_valid() || entry_lvl2_flags.is_leaf() {
@@ -98,7 +82,7 @@ impl Sv39PageTable {
             // Get the page table.
             let table_lvl1_addr = entry_lvl2.get_address();
             let table_lvl1 = {
-                let table = table_lvl1_addr as *mut Sv39PageTable;
+                let table = table_lvl1_addr as *mut PageTable;
                 unsafe { table.as_mut().unwrap() }
             };
             // Since the number of levels is constant, we op for nesting loops instead of recursion
@@ -112,11 +96,11 @@ impl Sv39PageTable {
                 }
                 let table_lvl0_addr = entry_lvl1.get_address();
                 unsafe {
-                    page_allocator.dealloc(PhysAddr::from(table_lvl0_addr));
+                    frame_allocator.dealloc(PhysAddr::from(table_lvl0_addr));
                 }
             }
             unsafe {
-                page_allocator.dealloc(PhysAddr::from(table_lvl1_addr));
+                frame_allocator.dealloc(PhysAddr::from(table_lvl1_addr));
             }
         }
         Ok(())
@@ -150,7 +134,7 @@ impl Sv39PageTable {
                 return Some(entry.translate(vaddr, i));
             }
             // Go to the next entry.
-            let table = entry.get_address() as *mut Sv39PageTable;
+            let table = entry.get_address() as *mut PageTable;
             let vpn_next = vpn_parts[i - 1];
             entry = unsafe { &mut (*table).0[vpn_next] };
         }
@@ -160,33 +144,33 @@ impl Sv39PageTable {
     /// Performs identity map (vaddr == paddr) for addresses in the range [start, end].
     pub fn id_map_range(
         &mut self,
-        page_allocator: &FrameAllocator,
+        frame_allocator: &frame::Allocator,
         start: usize,
         end: usize,
-        flags: Sv39PageTableEntryFlags,
+        flags: EntryFlag,
     ) -> Result<(), TableError> {
-        let mut addr = start & !(PAGE_SIZE - 1);
-        let num_kb_pages = (align_value(end, PAGE_ORDER) - addr) / PAGE_SIZE;
+        let mut addr = start & !(FRAME_SIZE - 1);
+        let num_kb_pages = (align_value(end, FRAME_ORDER) - addr) / FRAME_SIZE;
         println!("num_kb_pages={}", num_kb_pages);
         for _ in 0..num_kb_pages {
-            self.map(page_allocator, addr.into(), addr.into(), flags, 0)?;
-            addr += PAGE_SIZE;
+            self.map(frame_allocator, addr.into(), addr.into(), flags, 0)?;
+            addr += FRAME_SIZE;
         }
         Ok(())
     }
 }
 
-impl Default for Sv39PageTable {
+impl Default for PageTable {
     fn default() -> Self {
-        Self([Sv39PageTableEntry(0); 512])
+        Self([TableEntry(0); 512])
     }
 }
 
 /// A page table entry as described in RISC-V Sv39's specifications.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Sv39PageTableEntryFlags(u8);
+pub struct EntryFlag(u8);
 
-impl Sv39PageTableEntryFlags {
+impl EntryFlag {
     const V_BIT: u8 = 1 << 0;
     const R_BIT: u8 = 1 << 1;
     const W_BIT: u8 = 1 << 2;
@@ -197,35 +181,35 @@ impl Sv39PageTableEntryFlags {
     const D_BIT: u8 = 1 << 7;
 
     fn is_valid(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::V_BIT)
+        self.is_set(EntryFlag::V_BIT)
     }
 
     fn is_readable(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::R_BIT)
+        self.is_set(EntryFlag::R_BIT)
     }
 
     fn is_writeable(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::W_BIT)
+        self.is_set(EntryFlag::W_BIT)
     }
 
     fn is_executable(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::E_BIT)
+        self.is_set(EntryFlag::E_BIT)
     }
 
     fn is_user_mode(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::U_BIT)
+        self.is_set(EntryFlag::U_BIT)
     }
 
     fn is_global_mapping(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::G_BIT)
+        self.is_set(EntryFlag::G_BIT)
     }
 
     fn is_accessed(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::A_BIT)
+        self.is_set(EntryFlag::A_BIT)
     }
 
     fn is_dirty(&self) -> bool {
-        self.is_set(Sv39PageTableEntryFlags::D_BIT)
+        self.is_set(EntryFlag::D_BIT)
     }
 
     fn is_leaf(&self) -> bool {
@@ -237,38 +221,38 @@ impl Sv39PageTableEntryFlags {
     }
 
     fn set_valid(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::V_BIT, v)
+        self.set(EntryFlag::V_BIT, v)
     }
 
     /// Set the R_BIT of the flag.
     pub fn set_readable(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::R_BIT, v)
+        self.set(EntryFlag::R_BIT, v)
     }
 
     /// Set the W_BIT of the flag.
     pub fn set_writeable(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::W_BIT, v)
+        self.set(EntryFlag::W_BIT, v)
     }
 
     /// Set the E_BIT of the flag.
     pub fn set_executable(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::E_BIT, v)
+        self.set(EntryFlag::E_BIT, v)
     }
 
     fn set_user_mode(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::U_BIT, v)
+        self.set(EntryFlag::U_BIT, v)
     }
 
     fn set_global_mapping(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::G_BIT, v)
+        self.set(EntryFlag::G_BIT, v)
     }
 
     fn set_accessed(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::A_BIT, v)
+        self.set(EntryFlag::A_BIT, v)
     }
 
     fn set_dirty(self, v: bool) -> Self {
-        self.set(Sv39PageTableEntryFlags::D_BIT, v)
+        self.set(EntryFlag::D_BIT, v)
     }
 
     fn set(self, bits: u8, v: bool) -> Self {
@@ -282,9 +266,9 @@ impl Sv39PageTableEntryFlags {
 
 /// Representation of an entry in the allocation page table.
 #[derive(Debug, Clone, Copy)]
-pub struct Sv39PageTableEntry(usize);
+pub struct TableEntry(usize);
 
-impl Sv39PageTableEntry {
+impl TableEntry {
     fn translate(&self, vaddr: VirtAddr, lvl: usize) -> PhysAddr {
         let offset_mask = (1 << (12 + lvl * 9)) - 1;
         let offset = vaddr.0 & offset_mask;
@@ -301,11 +285,108 @@ impl Sv39PageTableEntry {
         Self(self.0 | (ppns[2]) << 28 | (ppns[1]) << 19 | (ppns[0]) << 10)
     }
 
-    fn get_flags(&self) -> Sv39PageTableEntryFlags {
-        Sv39PageTableEntryFlags((self.0 & 0xff) as u8)
+    fn get_flags(&self) -> EntryFlag {
+        EntryFlag((self.0 & 0xff) as u8)
     }
 
-    fn set_flags(self, flags: Sv39PageTableEntryFlags) -> Self {
+    fn set_flags(self, flags: EntryFlag) -> Self {
         Self(self.0 | flags.0 as usize)
+    }
+}
+/// A physical memory address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhysAddr(usize);
+
+impl fmt::Display for PhysAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Phys({:x})", self.0)
+    }
+}
+
+impl<T> From<*const T> for PhysAddr {
+    fn from(addr: *const T) -> Self {
+        Self(addr.addr())
+    }
+}
+
+impl From<usize> for PhysAddr {
+    fn from(addr: usize) -> Self {
+        Self(addr)
+    }
+}
+
+impl Add<usize> for PhysAddr {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl PhysAddr {
+    /// The zero physical address.
+    pub const ZERO: Self = Self(0);
+
+    /// Decomposes the physical address into physical page numbers (PPNs).
+    pub fn ppns(self) -> [usize; 3] {
+        [
+            self.0 >> 12 & 0x1ff,
+            self.0 >> 21 & 0x1ff,
+            self.0 >> 30 & 0x3ff_ffff,
+        ]
+    }
+
+    /// Offset in bytes between this physical address and another one.
+    pub fn offset_from(self, other: Self) -> isize {
+        self.0 as isize - other.0 as isize
+    }
+
+    /// Derives a raw pointer from this address.
+    pub fn as_ptr_mut<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+}
+
+/// A virtual memory address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VirtAddr(usize);
+
+impl fmt::Display for VirtAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Virt({:x})", self.0)
+    }
+}
+
+impl<T> From<*const T> for VirtAddr {
+    fn from(addr: *const T) -> Self {
+        Self(addr.addr())
+    }
+}
+
+impl From<usize> for VirtAddr {
+    fn from(addr: usize) -> Self {
+        Self(addr)
+    }
+}
+
+impl Add<usize> for VirtAddr {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl VirtAddr {
+    /// The zero virtual address.
+    pub const ZERO: Self = Self(0);
+
+    /// Decompose the virtual address into virtual page numbers (VPNs).
+    pub fn vpns(self) -> [usize; 3] {
+        [
+            self.0 >> 12 & 0x1ff,
+            self.0 >> 21 & 0x1ff,
+            self.0 >> 30 & 0x1ff,
+        ]
     }
 }

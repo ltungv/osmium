@@ -2,23 +2,50 @@
 
 use core::{fmt, mem::MaybeUninit, mem::size_of, num::NonZero, slice};
 
-use crate::mm::{PAGE_ORDER, PAGE_SIZE, PhysAddr, align_value};
+use spin::Once;
+
+use crate::{HEAP_SIZE, HEAP_START, align_value, sv39::PhysAddr};
+
+/// Page size as an exponent of 2.
+pub const FRAME_ORDER: usize = 12;
+
+/// Page size in bytes.
+pub const FRAME_SIZE: usize = 1 << FRAME_ORDER;
+
+static ALLOCATOR: Once<Allocator> = Once::new();
+
+/// Initialize the memory management system.
+pub fn initialize() {
+    ALLOCATOR.call_once(|| {
+        let heap_start = unsafe { NonZero::new(HEAP_START) };
+        let heap_size = unsafe { NonZero::new(HEAP_SIZE) };
+        Allocator::new(
+            heap_start.expect("non-zero heap start"),
+            heap_size.expect("non-zero heap size"),
+        )
+    });
+}
+
+/// Grabs the physical frame allocator.
+pub fn allocator() -> &'static Allocator {
+    ALLOCATOR.get().expect("frame allocator initialized")
+}
 
 /// An allocator for 4096-byte physical frames.
 #[derive(Debug)]
-pub struct FrameAllocator {
-    descriptors: spin::Mutex<&'static mut [FrameDescriptor]>,
+pub struct Allocator {
+    descriptors: spin::Mutex<&'static mut [Descriptor]>,
     alloc_start_addr: PhysAddr,
 }
 
-impl fmt::Display for FrameAllocator {
+impl fmt::Display for Allocator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let descriptors = self.descriptors.lock();
 
         let begin = PhysAddr::from(descriptors.as_ptr());
-        let end = begin + size_of::<FrameDescriptor>() * descriptors.len();
+        let end = begin + size_of::<Descriptor>() * descriptors.len();
 
-        let alloc_total_size = descriptors.len() * PAGE_SIZE;
+        let alloc_total_size = descriptors.len() * FRAME_SIZE;
         let alloc_begin = self.alloc_start_addr;
         let alloc_end = alloc_begin + alloc_total_size;
 
@@ -34,17 +61,17 @@ impl fmt::Display for FrameAllocator {
         let mut current_pages_begin = None;
         let mut count_taken = 0;
         for (page_end, descriptor) in descriptors.iter().enumerate() {
-            let is_taken = descriptor.contains(FrameDescriptorFlag::Taken);
+            let is_taken = descriptor.contains(DescriptorFlag::Taken);
             if !is_taken {
                 continue;
             }
             count_taken += 1;
             let pages_begin = *current_pages_begin.get_or_insert(page_end);
-            let is_last = descriptor.contains(FrameDescriptorFlag::Last);
+            let is_last = descriptor.contains(DescriptorFlag::Last);
             if is_last {
                 current_pages_begin.take();
-                let addr_begin = self.alloc_start_addr + pages_begin * PAGE_SIZE;
-                let addr_end = self.alloc_start_addr + page_end * PAGE_SIZE;
+                let addr_begin = self.alloc_start_addr + pages_begin * FRAME_SIZE;
+                let addr_end = self.alloc_start_addr + page_end * FRAME_SIZE;
                 writeln!(
                     f,
                     "[{:>4}] {} => {}: {:>3} page(s)",
@@ -63,32 +90,32 @@ impl fmt::Display for FrameAllocator {
             f,
             "used: {:>6} pages ({:>10} bytes).",
             count_taken,
-            count_taken * PAGE_SIZE
+            count_taken * FRAME_SIZE
         )?;
         writeln!(
             f,
             "free: {:>6} pages ({:>10} bytes).",
             count_free,
-            count_free * PAGE_SIZE
+            count_free * FRAME_SIZE
         )?;
         writeln!(f, "------------------------------------")?;
         Ok(())
     }
 }
 
-impl FrameAllocator {
+impl Allocator {
     /// Creates a new frame allocator given the heap's start address and size.
     pub fn new(heap_start: NonZero<usize>, heap_size: NonZero<usize>) -> Self {
-        let desc_size = size_of::<FrameDescriptor>();
-        let pages = heap_size.get() / (PAGE_SIZE + desc_size);
+        let desc_size = size_of::<Descriptor>();
+        let pages = heap_size.get() / (FRAME_SIZE + desc_size);
 
         let alloc_start_addr = PhysAddr::from(align_value(
             heap_start.get() + pages * desc_size,
-            PAGE_ORDER,
+            FRAME_ORDER,
         ));
 
         let descriptors =
-            unsafe { slice::from_raw_parts_mut(heap_start.get() as *mut FrameDescriptor, pages) };
+            unsafe { slice::from_raw_parts_mut(heap_start.get() as *mut Descriptor, pages) };
 
         for descriptor in descriptors.iter_mut() {
             descriptor.clear();
@@ -106,9 +133,9 @@ impl FrameAllocator {
         assert!(pages > 0);
         let mut descriptors = self.descriptors.lock();
         Self::find_free_pages(&descriptors, pages).map(|offset| {
-            (offset..offset + pages).for_each(|i| descriptors[i].set(FrameDescriptorFlag::Taken));
-            descriptors[offset + pages - 1].set(FrameDescriptorFlag::Last);
-            self.alloc_start_addr + PAGE_SIZE * offset
+            (offset..offset + pages).for_each(|i| descriptors[i].set(DescriptorFlag::Taken));
+            descriptors[offset + pages - 1].set(DescriptorFlag::Last);
+            self.alloc_start_addr + FRAME_SIZE * offset
         })
     }
 
@@ -120,7 +147,7 @@ impl FrameAllocator {
             let qwords = unsafe {
                 slice::from_raw_parts_mut(
                     addr.as_ptr_mut::<MaybeUninit<u64>>(),
-                    (PAGE_SIZE * pages) / 8,
+                    (FRAME_SIZE * pages) / 8,
                 )
             };
             for qword in qwords {
@@ -139,27 +166,27 @@ impl FrameAllocator {
     pub unsafe fn dealloc(&self, ptr: PhysAddr) {
         assert!(ptr != PhysAddr::ZERO);
         let page_offset = ptr.offset_from(self.alloc_start_addr) as usize;
-        let mut page = page_offset / PAGE_SIZE;
+        let mut page = page_offset / FRAME_SIZE;
         let mut descriptors = self.descriptors.lock();
-        while descriptors[page].contains(FrameDescriptorFlag::Taken)
-            && !descriptors[page].contains(FrameDescriptorFlag::Last)
+        while descriptors[page].contains(DescriptorFlag::Taken)
+            && !descriptors[page].contains(DescriptorFlag::Last)
         {
             descriptors[page].clear();
             page += 1;
         }
         assert!(
-            descriptors[page].contains(FrameDescriptorFlag::Last),
+            descriptors[page].contains(DescriptorFlag::Last),
             "Possible double-free detected! (Not taken found before last)"
         );
         descriptors[page].clear();
     }
 
     /// find a first address of a contiguous region of one or more free pages.
-    fn find_free_pages(descriptors: &[FrameDescriptor], pages: usize) -> Option<usize> {
+    fn find_free_pages(descriptors: &[Descriptor], pages: usize) -> Option<usize> {
         assert!(pages > 0);
         let mut current_pages_begin = None;
         for (pages_end, descriptor) in descriptors.iter().enumerate() {
-            if descriptor.contains(FrameDescriptorFlag::Taken) {
+            if descriptor.contains(DescriptorFlag::Taken) {
                 current_pages_begin.take();
                 continue;
             }
@@ -173,7 +200,7 @@ impl FrameAllocator {
 }
 
 #[derive(Debug)]
-enum FrameDescriptorFlag {
+enum DescriptorFlag {
     /// page has been taken by the allocator.
     Taken = 1 << 0,
 
@@ -182,16 +209,16 @@ enum FrameDescriptorFlag {
 }
 
 #[derive(Debug)]
-struct FrameDescriptor(u8);
+struct Descriptor(u8);
 
-impl FrameDescriptor {
+impl Descriptor {
     /// enable the bit corresponding to the given page type.
-    fn set(&mut self, flag: FrameDescriptorFlag) {
+    fn set(&mut self, flag: DescriptorFlag) {
         self.0 |= flag as u8;
     }
 
     /// return true of the given flag is set.
-    fn contains(&self, flag: FrameDescriptorFlag) -> bool {
+    fn contains(&self, flag: DescriptorFlag) -> bool {
         if self.0 == 0 {
             return false;
         }
