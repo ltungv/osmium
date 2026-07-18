@@ -4,8 +4,7 @@ use core::{fmt, ops::Add};
 
 use crate::{
     align_value,
-    frame::{self, FRAME_ORDER, FRAME_SIZE},
-    print, println,
+    frame::{FRAME_ORDER, FRAME_SIZE, FrameAllocator, FrameId},
 };
 
 /// Errors occurs when working with the page table.
@@ -36,7 +35,7 @@ impl PageTable {
     /// Create a mapping between the given virtual address and physical address.
     pub fn map(
         &mut self,
-        frame_allocator: &frame::Allocator,
+        frame_allocator: &FrameAllocator,
         vaddr: VirtAddr,
         paddr: PhysAddr,
         flags: EntryFlag,
@@ -58,7 +57,7 @@ impl PageTable {
                 // needs to be stored instead of the entire address.
                 let page = frame_allocator.zalloc(1).ok_or(TableError::OutOfMemory)?;
                 *entry = entry
-                    .set_address(page)
+                    .set_address(page.addr().into())
                     .set_flags(EntryFlag::default().set_valid(true));
             }
 
@@ -72,7 +71,7 @@ impl PageTable {
     }
 
     /// Unmap the page table.
-    pub fn unmap(&mut self, frame_allocator: &mut frame::Allocator) -> Result<(), TableError> {
+    pub fn unmap(&mut self, frame_allocator: &mut FrameAllocator) -> Result<(), TableError> {
         for entry_lvl2 in self.0.iter() {
             let entry_lvl2_flags = entry_lvl2.get_flags();
             if !entry_lvl2_flags.is_valid() || entry_lvl2_flags.is_leaf() {
@@ -96,11 +95,13 @@ impl PageTable {
                 }
                 let table_lvl0_addr = entry_lvl1.get_address();
                 unsafe {
-                    frame_allocator.dealloc(PhysAddr::from(table_lvl0_addr));
+                    frame_allocator
+                        .dealloc(FrameId::try_from(table_lvl0_addr).expect("valid frame address"));
                 }
             }
             unsafe {
-                frame_allocator.dealloc(PhysAddr::from(table_lvl1_addr));
+                frame_allocator
+                    .dealloc(FrameId::try_from(table_lvl1_addr).expect("valid frame address"));
             }
         }
         Ok(())
@@ -114,10 +115,8 @@ impl PageTable {
         // Assume the root is valid
         let mut entry = &self.0[vpn_parts[2]];
         for i in (0..3).rev() {
-            println!("probe {:b}", entry.0);
             let flags = entry.get_flags();
             if !flags.is_valid() {
-                println!("invalid");
                 break;
             }
             if flags.is_leaf() {
@@ -144,14 +143,13 @@ impl PageTable {
     /// Performs identity map (vaddr == paddr) for addresses in the range [start, end].
     pub fn id_map_range(
         &mut self,
-        frame_allocator: &frame::Allocator,
+        frame_allocator: &FrameAllocator,
         start: usize,
         end: usize,
         flags: EntryFlag,
     ) -> Result<(), TableError> {
         let mut addr = start & !(FRAME_SIZE - 1);
         let num_kb_pages = (align_value(end, FRAME_ORDER) - addr) / FRAME_SIZE;
-        println!("num_kb_pages={}", num_kb_pages);
         for _ in 0..num_kb_pages {
             self.map(frame_allocator, addr.into(), addr.into(), flags, 0)?;
             addr += FRAME_SIZE;
@@ -175,10 +173,6 @@ impl EntryFlag {
     const R_BIT: u8 = 1 << 1;
     const W_BIT: u8 = 1 << 2;
     const E_BIT: u8 = 1 << 3;
-    const U_BIT: u8 = 1 << 4;
-    const G_BIT: u8 = 1 << 5;
-    const A_BIT: u8 = 1 << 6;
-    const D_BIT: u8 = 1 << 7;
 
     fn is_valid(&self) -> bool {
         self.is_set(EntryFlag::V_BIT)
@@ -194,22 +188,6 @@ impl EntryFlag {
 
     fn is_executable(&self) -> bool {
         self.is_set(EntryFlag::E_BIT)
-    }
-
-    fn is_user_mode(&self) -> bool {
-        self.is_set(EntryFlag::U_BIT)
-    }
-
-    fn is_global_mapping(&self) -> bool {
-        self.is_set(EntryFlag::G_BIT)
-    }
-
-    fn is_accessed(&self) -> bool {
-        self.is_set(EntryFlag::A_BIT)
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.is_set(EntryFlag::D_BIT)
     }
 
     fn is_leaf(&self) -> bool {
@@ -237,22 +215,6 @@ impl EntryFlag {
     /// Set the E_BIT of the flag.
     pub fn set_executable(self, v: bool) -> Self {
         self.set(EntryFlag::E_BIT, v)
-    }
-
-    fn set_user_mode(self, v: bool) -> Self {
-        self.set(EntryFlag::U_BIT, v)
-    }
-
-    fn set_global_mapping(self, v: bool) -> Self {
-        self.set(EntryFlag::G_BIT, v)
-    }
-
-    fn set_accessed(self, v: bool) -> Self {
-        self.set(EntryFlag::A_BIT, v)
-    }
-
-    fn set_dirty(self, v: bool) -> Self {
-        self.set(EntryFlag::D_BIT, v)
     }
 
     fn set(self, bits: u8, v: bool) -> Self {
@@ -296,12 +258,6 @@ impl TableEntry {
 /// A physical memory address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysAddr(usize);
-
-impl fmt::Display for PhysAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Phys({:x})", self.0)
-    }
-}
 
 impl<T> From<*const T> for PhysAddr {
     fn from(addr: *const T) -> Self {
@@ -350,12 +306,6 @@ impl PhysAddr {
 /// A virtual memory address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VirtAddr(usize);
-
-impl fmt::Display for VirtAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Virt({:x})", self.0)
-    }
-}
 
 impl<T> From<*const T> for VirtAddr {
     fn from(addr: *const T) -> Self {
