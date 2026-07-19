@@ -2,7 +2,7 @@
 
 use core::{
     fmt::{self, Display},
-    mem::size_of,
+    mem::{MaybeUninit, size_of},
     num::NonZero,
     ops, slice,
 };
@@ -20,11 +20,11 @@ pub const FRAME_SIZE: usize = 1 << FRAME_ORDER;
 
 static ALLOCATOR: Once<FrameAllocator> = Once::new();
 
-/// Initialize the memory management system.
+/// Initialize the global frame allocator.
 pub fn initialize() {
-    ALLOCATOR.call_once(|| {
-        let heap_start = unsafe { NonZero::new(HEAP_START) };
-        let heap_size = unsafe { NonZero::new(HEAP_SIZE) };
+    ALLOCATOR.call_once(|| unsafe {
+        let heap_start = NonZero::new(HEAP_START);
+        let heap_size = NonZero::new(HEAP_SIZE);
         FrameAllocator::new(
             heap_start.expect("non-zero heap start"),
             heap_size.expect("non-zero heap size"),
@@ -32,7 +32,7 @@ pub fn initialize() {
     });
 }
 
-/// Grabs the physical frame allocator.
+/// Grabs the global physical frame allocator.
 pub fn frame_allocator() -> &'static FrameAllocator {
     ALLOCATOR.get().expect("initialized frame allocator")
 }
@@ -93,7 +93,7 @@ impl From<FrameId> for usize {
 }
 
 impl FrameId {
-    /// Returns the address to the frame.
+    /// Returns the address to the start of frame.
     pub fn addr(&self) -> usize {
         self.0 << FRAME_ORDER
     }
@@ -177,7 +177,12 @@ impl fmt::Debug for FrameAllocator {
 
 impl FrameAllocator {
     /// Creates a new frame allocator given the heap's start address and size.
-    pub fn new(heap_start: NonZero<usize>, heap_size: NonZero<usize>) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee that the memory region from `heap_start` to `heap_start + heap_size`
+    /// is physically available for this allocator to manage.
+    pub unsafe fn new(heap_start: NonZero<usize>, heap_size: NonZero<usize>) -> Self {
         let pages = heap_size.get() / (size_of::<FrameDescriptor>() + FRAME_SIZE);
         let alloc_start = FrameId::try_from(align_value(
             heap_start.get() + size_of::<FrameDescriptor>() * pages,
@@ -185,12 +190,20 @@ impl FrameAllocator {
         ))
         .expect("allocation start address is aligned");
 
-        let descriptors =
-            unsafe { slice::from_raw_parts_mut(heap_start.get() as *mut FrameDescriptor, pages) };
+        let descriptors = unsafe {
+            slice::from_raw_parts_mut(heap_start.get() as *mut MaybeUninit<FrameDescriptor>, pages)
+        };
 
         for descriptor in descriptors.iter_mut() {
-            descriptor.clear();
+            descriptor.write(FrameDescriptor(0));
         }
+
+        let descriptors = unsafe {
+            core::mem::transmute::<
+                &mut [core::mem::MaybeUninit<FrameDescriptor>],
+                &mut [FrameDescriptor],
+            >(descriptors)
+        };
 
         Self {
             alloc_start,
@@ -223,8 +236,8 @@ impl FrameAllocator {
     ///
     /// # Safety
     ///
-    /// Caller must make sure that this function is only called with the starting address of a
-    /// continguous page region
+    /// Caller must make sure this function is only called with the starting address of a contiguous
+    /// page region that was previously allocated by this frame allocator.
     pub unsafe fn dealloc(&self, id: FrameId) {
         assert!(id >= self.alloc_start);
         let mut offset = id - self.alloc_start;

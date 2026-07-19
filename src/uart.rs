@@ -1,8 +1,11 @@
 //! Driver for the NS16550D UART hardware.
 
-use core::{fmt::Write, hint::spin_loop};
+use core::{fmt::Write, hint::spin_loop, num::NonZero};
 
-use spin::mutex::{SpinMutex, SpinMutexGuard};
+use spin::{
+    Once,
+    mutex::{SpinMutex, SpinMutexGuard},
+};
 
 /// Print to a monitor using UART.
 #[macro_export]
@@ -15,7 +18,7 @@ macro_rules! print {
     }};
 }
 
-/// Print to a monitor using uart, with a newline.
+/// Print to a monitor using UART, with a newline.
 #[macro_export]
 macro_rules! println {
     () => (print!("\r\n"));
@@ -26,48 +29,105 @@ macro_rules! println {
 pub const BASE_ADDRESS: usize = 0x1000_0000;
 
 /// Global UART driver instance.
-static DRIVER: SpinMutex<UartDriver> = SpinMutex::new(UartDriver(BASE_ADDRESS));
+static DRIVER: Once<SpinMutex<UartDriver>> = Once::new();
+
+/// Initialize the global UART driver state.
+pub fn initialize() {
+    DRIVER.call_once(|| {
+        let mut driver = unsafe {
+            UartDriver::new(NonZero::new(BASE_ADDRESS).expect("non-zero UART base address"))
+        };
+        driver.initialize();
+        SpinMutex::new(driver)
+    });
+}
 
 /// Acquire unique access to the global UART driver.
 pub fn driver() -> SpinMutexGuard<'static, UartDriver> {
-    DRIVER.lock()
-}
-
-/// Initialize the global uart driver state.
-pub fn initialize() {
-    DRIVER.lock().initialize();
+    DRIVER.get().expect("initialized UART driver").lock()
 }
 
 /// A driver for NS16550D (Universal Asynchronous Receiver/Transmitter with FIFOs).
 #[derive(Debug)]
-pub struct UartDriver(usize);
+pub struct UartDriver(&'static mut [u8; 8]);
 
 impl UartDriver {
+    /// Receiver holding register.
+    const RHR: usize = 0b000;
+
+    /// Transmitter holding register.
+    const THR: usize = 0b000;
+
+    /// Interrupt enable register
+    const IER: usize = 0b001;
+
+    /// Interrupt status register
+    const ISR: usize = 0b010;
+
+    /// FIFO control register
+    const FCR: usize = 0b010;
+
+    /// Line control register
+    const LCR: usize = 0b011;
+
+    /// Modem control register
+    const MCR: usize = 0b100;
+
+    /// Line status register
+    const LSR: usize = 0b101;
+
+    /// Modem status register
+    const MSR: usize = 0b110;
+
+    /// Scratch pad register
+    const SPR: usize = 0b111;
+
+    /// Divisor latch, least significant byte
+    const DLL: usize = 0b000;
+
+    /// Divisor latch, most significant byte
+    const DLM: usize = 0b001;
+
+    /// Prescaler division
+    const PSD: usize = 0b101;
+
+    /// Create a new UART driver with the given base address.
+    pub const unsafe fn new(addr: NonZero<usize>) -> Self {
+        let ptr = addr.get() as *mut [u8; 8];
+        Self(unsafe { &mut *ptr })
+    }
+
     /// Put a byte into the transmitter holding register (thr) blocking until the byte is ready to be sent.
-    pub fn put(&self, byte: u8) -> Option<()> {
-        unsafe {
-            if self.lsr().read_volatile() & (1 << 6) == 0 {
-                None
-            } else {
-                self.thr().write_volatile(byte);
-                Some(())
-            }
+    pub fn put(&mut self, byte: u8) -> Option<()> {
+        if self.rd_reg(Self::LSR) & (1 << 6) == 0 {
+            None
+        } else {
+            self.wr_reg(Self::THR, byte);
+            Some(())
         }
     }
 
     /// Get the next available byte from the receiver buffer register (rbr).
     pub fn get(&self) -> Option<u8> {
-        unsafe {
-            if self.lsr().read_volatile() & (1 << 0) == 0 {
-                None
-            } else {
-                Some(self.rbr().read_volatile())
-            }
+        if self.rd_reg(Self::LSR) & (1 << 0) == 0 {
+            None
+        } else {
+            Some(self.rd_reg(Self::RHR))
         }
     }
 
+    /// Read a byte from a register offset
+    fn rd_reg(&self, offset: usize) -> u8 {
+        unsafe { core::ptr::read_volatile(&self.0[offset]) }
+    }
+
+    /// Write a byte to a register offset
+    fn wr_reg(&mut self, offset: usize, value: u8) {
+        unsafe { core::ptr::write_volatile(&mut self.0[offset], value) };
+    }
+
     /// Initialize the UART hardware registers.
-    fn initialize(&self) {
+    fn initialize(&mut self) {
         // We'll later restore lcr to this value after setting the divisor.
         let lcr_value = 1 << 1 | 1 << 0;
 
@@ -83,61 +143,22 @@ impl UartDriver {
         let divisor_ls = divisor & 0xff;
         let divisor_ms = divisor >> 8;
 
-        unsafe {
-            // Enable fifo, clear tx/rx queues, and set interrupt watermark at 14 bytes.
-            self.fcr()
-                .write_volatile(1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
-            // Set data word length to 8 bits.
-            self.lcr().write_volatile(lcr_value);
-            // Enable receiver buffer interrupts.
-            self.ier().write_volatile(1 << 0);
-            // Enable dlab.
-            self.lcr().write_volatile(lcr_value | 1 << 7);
-            // Set divisor least significant bits.
-            self.dll().write_volatile(divisor_ls as u8);
-            // Set divisor most significant bits.
-            self.dlm().write_volatile(divisor_ms as u8);
-            // Disable dlab.
-            self.lcr().write_volatile(lcr_value);
-            // Mark data terminal ready, and signal request to send.
-            self.mcr().write_volatile(1 << 1 | 1 << 0);
-        }
-    }
-
-    fn rbr(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(0) }
-    }
-
-    fn thr(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(0) }
-    }
-
-    fn dll(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(0) }
-    }
-
-    fn ier(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(1) }
-    }
-
-    fn dlm(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(1) }
-    }
-
-    fn fcr(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(2) }
-    }
-
-    fn lcr(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(3) }
-    }
-
-    fn mcr(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(4) }
-    }
-
-    fn lsr(&self) -> *mut u8 {
-        unsafe { (self.0 as *mut u8).add(5) }
+        // Enable fifo, clear tx/rx queues, and set interrupt watermark at 14 bytes.
+        self.wr_reg(Self::FCR, 1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
+        // Set data word length to 8 bits.
+        self.wr_reg(Self::LCR, lcr_value);
+        // Enable receiver buffer interrupts.
+        self.wr_reg(Self::IER, 1 << 0);
+        // Enable dlab.
+        self.wr_reg(Self::LCR, lcr_value | 1 << 7);
+        // Set divisor least significant bits.
+        self.wr_reg(Self::DLL, divisor_ls as u8);
+        // Set divisor most significant bits.
+        self.wr_reg(Self::DLM, divisor_ms as u8);
+        // Disable dlab.
+        self.wr_reg(Self::LCR, lcr_value);
+        // Mark data terminal ready, and signal request to send.
+        self.wr_reg(Self::MCR, 1 << 1 | 1 << 0);
     }
 }
 
