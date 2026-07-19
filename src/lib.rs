@@ -12,6 +12,8 @@
     rust_2024_compatibility
 )]
 
+extern crate alloc;
+
 pub mod frame;
 pub mod kmem;
 pub mod rt;

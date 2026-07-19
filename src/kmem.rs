@@ -4,7 +4,6 @@ use core::{
     alloc::{GlobalAlloc, Layout},
     fmt,
     mem::size_of,
-    sync::atomic::{self, AtomicPtr},
 };
 
 use spin::{
@@ -14,7 +13,8 @@ use spin::{
 
 use crate::{
     align_value,
-    frame::{self, FrameAllocator, FrameId},
+    frame::{self, FRAME_SIZE, FrameAllocator, FrameId},
+    print, println,
     sv39::{PageTable, PhysAddr, VirtAddr},
 };
 
@@ -100,21 +100,19 @@ impl AllocationNode {
 
 /// A linked list of nodes that manage the byte-level memory system.
 pub struct AllocationList {
-    head: AtomicPtr<u8>,
-    tail: AtomicPtr<u8>,
+    head: FrameId,
+    tail: FrameId,
 }
 
 impl AllocationList {
     /// Get the memory address of the list head.
     pub fn head(&self) -> usize {
-        let head = self.head.load(atomic::Ordering::Relaxed);
-        head as usize
+        self.head.addr()
     }
 
     /// Get the memory address of the list tail.
     pub fn tail(&self) -> usize {
-        let tail = self.tail.load(atomic::Ordering::Relaxed);
-        tail as usize
+        self.tail.addr()
     }
 }
 
@@ -141,8 +139,8 @@ impl IntoIterator for &AllocationList {
 
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
-            ptr: self.head.load(atomic::Ordering::Relaxed),
-            tail: self.tail.load(atomic::Ordering::Relaxed),
+            ptr: self.head.addr() as *const u8,
+            tail: self.tail.addr() as *const u8,
         }
     }
 }
@@ -154,8 +152,8 @@ impl IntoIterator for &mut AllocationList {
 
     fn into_iter(self) -> Self::IntoIter {
         Self::IntoIter {
-            ptr: self.head.load(atomic::Ordering::Relaxed),
-            tail: self.tail.load(atomic::Ordering::Relaxed),
+            ptr: self.head.addr() as *mut u8,
+            tail: self.tail.addr() as *mut u8,
         }
     }
 }
@@ -220,12 +218,17 @@ pub struct Allocator {
 impl Allocator {
     /// Initialize the kernel's memory.
     pub fn new(page_allocator: &FrameAllocator) -> Option<Self> {
-        let kmem_head = page_allocator.zalloc(PAGE_COUNT)?;
-        let kmem_tail = kmem_head + PAGE_COUNT + 1;
-        let free_allocation = AllocationList {
-            head: AtomicPtr::new(kmem_head.addr() as *mut u8),
-            tail: AtomicPtr::new(kmem_tail.addr() as *mut u8),
+        let head = page_allocator.zalloc(PAGE_COUNT)?;
+        let tail = head + PAGE_COUNT;
+        let free_allocation = AllocationList { head, tail };
+
+        let node = unsafe {
+            let ptr = head.addr() as *mut AllocationNode;
+            &mut *ptr
         };
+        node.free();
+        node.set_size(FRAME_SIZE * PAGE_COUNT);
+
         let page_table_frame_id = page_allocator.zalloc(1)?;
         Some(Self {
             allocation_list: free_allocation,
@@ -234,8 +237,18 @@ impl Allocator {
     }
 
     /// Get a reference to the root page table.
-    pub fn page_table_addr(&self) -> *mut PageTable {
-        self.page_table_frame_id.addr() as *mut PageTable
+    pub fn page_table_addr(&self) -> usize {
+        self.page_table_frame_id.addr()
+    }
+
+    /// Get an immutable raw pointer to the root page table.
+    pub fn page_table_ptr(&self) -> *const PageTable {
+        self.page_table_addr() as *const PageTable
+    }
+
+    /// Get a mutable raw pointer to the root page table.
+    pub fn page_table_ptr_mut(&self) -> *mut PageTable {
+        self.page_table_addr() as *mut PageTable
     }
 
     /// Get a reference to the allocation list.
@@ -248,6 +261,7 @@ impl Allocator {
         let size = align_value(size, 3) + size_of::<AllocationNode>();
         let mut allocation_list_iter = (&mut self.allocation_list).into_iter().peekable();
         while let Some(node_addr) = allocation_list_iter.next() {
+            println!("{:p}", node_addr);
             let node = unsafe { &mut *node_addr };
             let node_size = node.get_size();
             if node.is_free() && size <= node_size {
@@ -297,7 +311,7 @@ impl Allocator {
 
     /// Translates a virtual memory address into a physical one.
     pub fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let table = unsafe { &*self.page_table_addr() };
+        let table = unsafe { &*self.page_table_ptr() };
         table.virt2phys(vaddr)
     }
 
@@ -327,6 +341,7 @@ struct OsGlobalAlloc;
 
 unsafe impl GlobalAlloc for OsGlobalAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        println!("{:?}", layout);
         // We align to the next page size so that when
         // we divide by PAGE_SIZE, we get exactly the number
         // of pages necessary.
