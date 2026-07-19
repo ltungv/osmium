@@ -5,30 +5,23 @@ use core::arch::asm;
 use alloc::vec::Vec;
 
 use crate::{
-    BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
-    KERNEL_STACK_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
+    HEAP_START,
     frame::{self, frame_allocator},
     kmem::{self, kmem},
     print, println,
-    sv39::{self, EntryFlags, PhysAddr},
+    sv39::PhysAddr,
     uart,
 };
 
 #[unsafe(no_mangle)]
 extern "C" fn kinit() -> usize {
+    uart::initialize();
     frame::initialize();
     kmem::initialize();
 
-    id_map().unwrap();
-
     #[cfg(debug_assertions)]
     {
-        id_map_check();
-        let (kmem_start, kmem_end) = {
-            let m = kmem();
-            let alloc_list = m.allocation_list();
-            (alloc_list.head(), alloc_list.tail())
-        };
+        let (kmem_start, kmem_end) = kmem().mem_region();
         unsafe {
             use crate::{
                 BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
@@ -59,8 +52,8 @@ extern "C" fn kinit() -> usize {
     let m = kmem().virt2phys(p).unwrap_or(PhysAddr::ZERO);
     println!("Walk {:?} = {:?}", p, m);
 
-    let root_alloc_table_addr = kmem().page_table_addr();
-    (root_alloc_table_addr >> 12) | (8 << 60)
+    let root_frame_id = kmem().root_frame_id();
+    (root_frame_id.addr() >> 12) | (8 << 60)
 }
 
 #[unsafe(no_mangle)]
@@ -69,8 +62,20 @@ extern "C" fn kmain() {
     println!("{:?}", frame_allocator());
 
     {
-        let v: Vec<u8> = Vec::with_capacity(8);
-        println!("{}", v.capacity());
+        let v1: Vec<u8> = Vec::with_capacity(8);
+        let v2: Vec<u8> = Vec::with_capacity(8);
+        let v3: Vec<u8> = Vec::with_capacity(8);
+        println!("{:?}", kmem());
+
+        drop(v2);
+        println!("{:?}", kmem());
+
+        let v4: Vec<u8> = Vec::with_capacity(64);
+        println!("{:?}", kmem());
+
+        drop(v1);
+        drop(v3);
+        drop(v4);
     }
 }
 
@@ -95,105 +100,4 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
         println!("panic: no information available.");
     }
     abort();
-}
-
-/// Identity map all sections of the kernel's memory.
-fn id_map() -> Result<(), sv39::Error> {
-    let (kmem_start, kmem_end) = {
-        let m = kmem();
-        let alloc_list = m.allocation_list();
-        (alloc_list.head(), alloc_list.tail())
-    };
-    let root = unsafe { &mut *kmem().page_table_ptr_mut() };
-
-    root.map(
-        frame::frame_allocator(),
-        uart::BASE_ADDRESS.into(),
-        uart::BASE_ADDRESS.into(),
-        EntryFlags::READ | EntryFlags::WRITE,
-        0,
-    )?;
-
-    root.id_map_range(
-        frame::frame_allocator(),
-        kmem_start,
-        kmem_end,
-        EntryFlags::READ | EntryFlags::WRITE,
-    )?;
-
-    unsafe {
-        root.id_map_range(
-            frame::frame_allocator(),
-            HEAP_START,
-            HEAP_START + HEAP_SIZE,
-            EntryFlags::READ | EntryFlags::WRITE,
-        )?;
-
-        root.id_map_range(
-            frame::frame_allocator(),
-            TEXT_START,
-            TEXT_END,
-            EntryFlags::READ | EntryFlags::EXECUTE,
-        )?;
-
-        root.id_map_range(
-            frame::frame_allocator(),
-            RODATA_START,
-            RODATA_END,
-            EntryFlags::READ | EntryFlags::EXECUTE,
-        )?;
-
-        root.id_map_range(
-            frame::frame_allocator(),
-            DATA_START,
-            DATA_END,
-            EntryFlags::READ | EntryFlags::WRITE,
-        )?;
-
-        root.id_map_range(
-            frame::frame_allocator(),
-            BSS_START,
-            BSS_END,
-            EntryFlags::READ | EntryFlags::WRITE,
-        )?;
-
-        root.id_map_range(
-            frame::frame_allocator(),
-            KERNEL_STACK_START,
-            KERNEL_STACK_END,
-            EntryFlags::READ | EntryFlags::WRITE,
-        )?;
-    }
-    Ok(())
-}
-
-/// Identity map all sections of the kernel's memory.
-fn id_map_check() {
-    fn check(addr: usize) -> bool {
-        let root = unsafe { &mut *kmem().page_table_ptr_mut() };
-        root.virt2phys(addr.into())
-            .is_some_and(|paddr| paddr == addr.into())
-    }
-
-    let (kmem_start, kmem_end) = {
-        let m = kmem();
-        let alloc_list = m.allocation_list();
-        (alloc_list.head(), alloc_list.tail())
-    };
-    assert!(check(uart::BASE_ADDRESS,));
-    assert!(check(kmem_start));
-    assert!(check(kmem_end));
-    unsafe {
-        assert!(check(HEAP_START));
-        assert!(check(TEXT_START));
-        assert!(check(TEXT_END));
-        assert!(check(RODATA_START));
-        assert!(check(RODATA_END));
-        assert!(check(DATA_START));
-        assert!(check(DATA_END));
-        assert!(check(BSS_START));
-        assert!(check(BSS_END));
-        assert!(check(KERNEL_STACK_START));
-        assert!(check(KERNEL_STACK_END));
-    }
 }
