@@ -2,11 +2,12 @@
 
 use core::{
     fmt::{self, Display},
-    mem::{MaybeUninit, size_of},
+    mem::size_of,
     num::NonZero,
     ops, slice,
 };
 
+use bitflags::bitflags;
 use spin::Once;
 
 use crate::{HEAP_SIZE, HEAP_START, align_value};
@@ -38,15 +39,15 @@ pub fn frame_allocator() -> &'static FrameAllocator {
 
 /// Errors from interacting with physical frames.
 #[derive(Debug)]
-pub enum FrameError {
+pub enum Error {
     /// Frame address is not aligned to `FRAME_SIZE`.
     UnalignedAddress(usize),
 }
 
-impl Display for FrameError {
+impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FrameError::UnalignedAddress(addr) => {
+            Error::UnalignedAddress(addr) => {
                 write!(f, "0x{addr:x} is not aligned to {FRAME_SIZE}")
             }
         }
@@ -74,14 +75,20 @@ impl ops::Sub<Self> for FrameId {
 }
 
 impl TryFrom<usize> for FrameId {
-    type Error = FrameError;
+    type Error = Error;
 
     fn try_from(addr: usize) -> Result<Self, Self::Error> {
         let mask = (1 << FRAME_ORDER) - 1;
         if addr & mask != 0 {
-            return Err(FrameError::UnalignedAddress(addr));
+            return Err(Error::UnalignedAddress(addr));
         }
         Ok(Self(addr >> FRAME_ORDER))
+    }
+}
+
+impl From<FrameId> for usize {
+    fn from(id: FrameId) -> Self {
+        id.0
     }
 }
 
@@ -101,13 +108,12 @@ pub struct FrameAllocator {
 impl fmt::Debug for FrameAllocator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let descriptors = self.descriptors.lock();
-
-        let begin = descriptors.as_ptr() as usize;
-        let end = begin + size_of::<FrameDescriptor>() * descriptors.len();
+        let desc_begin = descriptors.as_ptr() as usize;
+        let desc_end = desc_begin + size_of::<FrameDescriptor>() * descriptors.len();
 
         let alloc_total_size = descriptors.len() * FRAME_SIZE;
         let alloc_begin = self.alloc_start;
-        let alloc_end = alloc_begin + alloc_total_size;
+        let alloc_end = alloc_begin + descriptors.len();
 
         writeln!(f, "------------------------------------")?;
         writeln!(
@@ -116,7 +122,7 @@ impl fmt::Debug for FrameAllocator {
             descriptors.len(),
             alloc_total_size,
         )?;
-        writeln!(f, "desc: 0x{:x} -> 0x{:x}", begin, end)?;
+        writeln!(f, "desc: 0x{:x} -> 0x{:x}", desc_begin, desc_end)?;
         writeln!(
             f,
             "phys: 0x{:x} -> 0x{:x}",
@@ -127,13 +133,13 @@ impl fmt::Debug for FrameAllocator {
         let mut current_pages_begin = None;
         let mut count_taken = 0;
         for (page_end, descriptor) in descriptors.iter().enumerate() {
-            let is_taken = descriptor.contains(FrameDescriptorFlag::Taken);
+            let is_taken = descriptor.has(FrameDescriptorFlags::TAKEN);
             if !is_taken {
                 continue;
             }
             count_taken += 1;
             let pages_begin = *current_pages_begin.get_or_insert(page_end);
-            let is_last = descriptor.contains(FrameDescriptorFlag::Last);
+            let is_last = descriptor.has(FrameDescriptorFlags::LAST);
             if is_last {
                 current_pages_begin.take();
                 let alloc_begin = self.alloc_start + pages_begin;
@@ -195,12 +201,11 @@ impl FrameAllocator {
     /// Allocates a contiguous region of `pages` and returns the address at the start of the region.
     /// If there's not enough memory, returns `None`.
     pub fn alloc(&self, pages: usize) -> Option<FrameId> {
-        assert!(pages > 0);
         let mut descriptors = self.descriptors.lock();
         Self::find_free_pages(&descriptors, pages).map(|offset| {
-            descriptors[offset + pages - 1].set(FrameDescriptorFlag::Last);
+            descriptors[offset + pages - 1].set(FrameDescriptorFlags::LAST);
             for i in offset..offset + pages {
-                descriptors[i].set(FrameDescriptorFlag::Taken);
+                descriptors[i].set(FrameDescriptorFlags::TAKEN);
             }
             self.alloc_start + offset
         })
@@ -209,16 +214,8 @@ impl FrameAllocator {
     /// Allocates a contiguous region of `pages`, initializes the region to 0, and returns the address
     /// at the start of the region. If there's not enough memory, returns `None`.
     pub fn zalloc(&self, pages: usize) -> Option<FrameId> {
-        self.alloc(pages).inspect(|frame_id| {
-            let qwords = unsafe {
-                slice::from_raw_parts_mut(
-                    frame_id.addr() as *mut MaybeUninit<u64>,
-                    (FRAME_SIZE * pages) / size_of::<u64>(),
-                )
-            };
-            for qword in qwords {
-                qword.write(0);
-            }
+        self.alloc(pages).inspect(|frame_id| unsafe {
+            core::ptr::write_bytes(frame_id.addr() as *mut u8, 0, FRAME_SIZE * pages);
         })
     }
 
@@ -229,17 +226,17 @@ impl FrameAllocator {
     /// Caller must make sure that this function is only called with the starting address of a
     /// continguous page region
     pub unsafe fn dealloc(&self, id: FrameId) {
-        assert!(id > self.alloc_start);
+        assert!(id >= self.alloc_start);
         let mut offset = id - self.alloc_start;
         let mut descriptors = self.descriptors.lock();
-        while descriptors[offset].contains(FrameDescriptorFlag::Taken)
-            && !descriptors[offset].contains(FrameDescriptorFlag::Last)
+        while descriptors[offset].has(FrameDescriptorFlags::TAKEN)
+            && !descriptors[offset].has(FrameDescriptorFlags::LAST)
         {
             descriptors[offset].clear();
             offset += 1;
         }
         assert!(
-            descriptors[offset].contains(FrameDescriptorFlag::Last),
+            descriptors[offset].has(FrameDescriptorFlags::LAST),
             "possible double-free detected! (not taken found before last)"
         );
         descriptors[offset].clear();
@@ -250,7 +247,7 @@ impl FrameAllocator {
         assert!(pages > 0);
         let mut current_pages_begin = None;
         for (pages_end, descriptor) in descriptors.iter().enumerate() {
-            if descriptor.contains(FrameDescriptorFlag::Taken) {
+            if descriptor.has(FrameDescriptorFlags::TAKEN) {
                 current_pages_begin.take();
                 continue;
             }
@@ -263,33 +260,29 @@ impl FrameAllocator {
     }
 }
 
-#[derive(Debug)]
-enum FrameDescriptorFlag {
-    /// Page has been taken by the allocator.
-    Taken = 1 << 0,
-
-    /// Page is the last one in the allocated pages.
-    Last = 1 << 1,
+bitflags! {
+    #[derive(Clone, Copy)]
+    struct FrameDescriptorFlags: u8 {
+        const TAKEN = 1 << 0;
+        const LAST = 1 << 1;
+    }
 }
 
 #[derive(Debug)]
 struct FrameDescriptor(u8);
 
 impl FrameDescriptor {
-    /// enable the bit corresponding to the given page type.
-    fn set(&mut self, flag: FrameDescriptorFlag) {
-        self.0 |= flag as u8;
+    /// Enable the bit corresponding to the given page type.
+    fn set(&mut self, flags: FrameDescriptorFlags) {
+        self.0 |= flags.bits();
     }
 
-    /// return true of the given flag is set.
-    fn contains(&self, flag: FrameDescriptorFlag) -> bool {
-        if self.0 == 0 {
-            return false;
-        }
-        self.0 & flag as u8 != 0
+    /// Return true of the given flag is set.
+    fn has(&self, flags: FrameDescriptorFlags) -> bool {
+        self.0 & flags.bits() != 0
     }
 
-    /// clear all previously set flags.
+    /// Clear all previously set flags.
     fn clear(&mut self) {
         self.0 = 0;
     }
