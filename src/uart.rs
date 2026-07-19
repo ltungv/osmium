@@ -1,6 +1,6 @@
 //! Driver for the NS16550D UART hardware.
 
-use core::{fmt::Write, hint::spin_loop, num::NonZero};
+use core::{fmt::Write, hint::spin_loop};
 
 use spin::{
     Once,
@@ -34,9 +34,7 @@ static DRIVER: Once<SpinMutex<UartDriver>> = Once::new();
 /// Initialize the global UART driver state.
 pub fn initialize() {
     DRIVER.call_once(|| {
-        let mut driver = unsafe {
-            UartDriver::new(NonZero::new(BASE_ADDRESS).expect("non-zero UART base address"))
-        };
+        let mut driver = unsafe { UartDriver::new(BASE_ADDRESS) };
         driver.initialize();
         SpinMutex::new(driver)
     });
@@ -92,8 +90,8 @@ impl UartDriver {
     const PSD: usize = 0b101;
 
     /// Create a new UART driver with the given base address.
-    pub const unsafe fn new(addr: NonZero<usize>) -> Self {
-        let ptr = addr.get() as *mut [u8; 8];
+    pub const unsafe fn new(addr: usize) -> Self {
+        let ptr = addr as *mut [u8; 8];
         Self(unsafe { &mut *ptr })
     }
 
