@@ -10,4 +10,5 @@ test = false
 bench = false
 
 [dependencies]
+bitflags = "2.13.1"
 spin = "0.12.1"

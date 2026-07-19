@@ -2,6 +2,8 @@
 
 use core::{fmt, ops::Add};
 
+use bitflags::bitflags;
+
 use crate::{
     align_value,
     frame::{FRAME_ORDER, FRAME_SIZE, FrameAllocator, FrameId},
@@ -9,7 +11,7 @@ use crate::{
 
 /// Errors occurs when working with the page table.
 #[derive(Debug)]
-pub enum TableError {
+pub enum Error {
     /// There's no free memory page left.
     OutOfMemory,
 
@@ -17,7 +19,7 @@ pub enum TableError {
     InvalidState,
 }
 
-impl fmt::Display for TableError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::OutOfMemory => write!(f, "out of memory."),
@@ -38,12 +40,12 @@ impl PageTable {
         frame_allocator: &FrameAllocator,
         vaddr: VirtAddr,
         paddr: PhysAddr,
-        flags: EntryFlag,
+        flags: EntryFlags,
         level: usize,
-    ) -> Result<(), TableError> {
+    ) -> Result<(), Error> {
         // Make sure the read, write, and execute flags have been provided. Otherwise, we'll leak
         // memory and always create a page fault.
-        assert!(flags.is_readable() || flags.is_writeable() || flags.is_executable());
+        assert!(flags.is_leaf());
 
         // Extract the virtual page numbers from the virtual address.
         let vpns = vaddr.vpns();
@@ -51,35 +53,33 @@ impl PageTable {
         // Assume the root page table is valid
         let mut entry = &mut self.0[vpns[2]];
         for vpn_next in vpns[level..2].iter().rev() {
-            if !entry.get_flags().is_valid() {
+            if !entry.flags().contains(EntryFlags::VALID) {
                 // Allocate a 4096-byte page to contain to page table and mark the page entry as
                 // valid. Because every page is 4096-byte aligned, only the physical page number
                 // needs to be stored instead of the entire address.
-                let page = frame_allocator.zalloc(1).ok_or(TableError::OutOfMemory)?;
-                *entry = entry
-                    .set_address(page.addr().into())
-                    .set_flags(EntryFlag::default().set_valid(true));
+                let page = frame_allocator.zalloc(1).ok_or(Error::OutOfMemory)?;
+                *entry = TableEntry::new(page.addr().into(), EntryFlags::VALID);
             }
 
             // Go to the next entry.
-            let table = entry.get_address() as *mut PageTable;
+            let table = entry.addr() as *mut PageTable;
             entry = unsafe { &mut (*table).0[*vpn_next] };
         }
 
-        *entry = entry.set_address(paddr).set_flags(flags.set_valid(true));
+        *entry = TableEntry::new(paddr, flags | EntryFlags::VALID);
         Ok(())
     }
 
     /// Unmap the page table.
-    pub fn unmap(&mut self, frame_allocator: &mut FrameAllocator) -> Result<(), TableError> {
+    pub fn unmap(&mut self, frame_allocator: &FrameAllocator) -> Result<(), Error> {
         for entry_lvl2 in self.0.iter() {
-            let entry_lvl2_flags = entry_lvl2.get_flags();
-            if !entry_lvl2_flags.is_valid() || entry_lvl2_flags.is_leaf() {
+            let entry_lvl2_flags = entry_lvl2.flags();
+            if !entry_lvl2_flags.contains(EntryFlags::VALID) || entry_lvl2_flags.is_leaf() {
                 // Ignore invalid and leaf entry.
                 continue;
             }
             // Get the page table.
-            let table_lvl1_addr = entry_lvl2.get_address();
+            let table_lvl1_addr = entry_lvl2.addr();
             let table_lvl1 = {
                 let table = table_lvl1_addr as *mut PageTable;
                 unsafe { table.as_mut().unwrap() }
@@ -88,12 +88,12 @@ impl PageTable {
             // If we recursively call `unmap` again on inner tables, we would make extraneous
             // iterations when working on the level 0 table.
             for entry_lvl1 in table_lvl1.0.iter() {
-                let entry_lvl1_flags = entry_lvl1.get_flags();
-                if !entry_lvl1_flags.is_valid() || entry_lvl1_flags.is_leaf() {
+                let entry_lvl1_flags = entry_lvl1.flags();
+                if !entry_lvl1_flags.contains(EntryFlags::VALID) || entry_lvl1_flags.is_leaf() {
                     // Ignore invalid and leaf entry.
                     continue;
                 }
-                let table_lvl0_addr = entry_lvl1.get_address();
+                let table_lvl0_addr = entry_lvl1.addr();
                 unsafe {
                     frame_allocator
                         .dealloc(FrameId::try_from(table_lvl0_addr).expect("valid frame address"));
@@ -115,8 +115,8 @@ impl PageTable {
         // Assume the root is valid
         let mut entry = &self.0[vpn_parts[2]];
         for i in (0..3).rev() {
-            let flags = entry.get_flags();
-            if !flags.is_valid() {
+            let flags = entry.flags();
+            if !flags.contains(EntryFlags::VALID) {
                 break;
             }
             if flags.is_leaf() {
@@ -133,7 +133,7 @@ impl PageTable {
                 return Some(entry.translate(vaddr, i));
             }
             // Go to the next entry.
-            let table = entry.get_address() as *mut PageTable;
+            let table = entry.addr() as *mut PageTable;
             let vpn_next = vpn_parts[i - 1];
             entry = unsafe { &mut (*table).0[vpn_next] };
         }
@@ -146,8 +146,8 @@ impl PageTable {
         frame_allocator: &FrameAllocator,
         start: usize,
         end: usize,
-        flags: EntryFlag,
-    ) -> Result<(), TableError> {
+        flags: EntryFlags,
+    ) -> Result<(), Error> {
         let mut addr = start & !(FRAME_SIZE - 1);
         let num_kb_pages = (align_value(end, FRAME_ORDER) - addr) / FRAME_SIZE;
         for _ in 0..num_kb_pages {
@@ -164,65 +164,40 @@ impl Default for PageTable {
     }
 }
 
-/// A page table entry as described in RISC-V Sv39's specifications.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct EntryFlag(u8);
+bitflags! {
+    /// Flags for each page table entry.
+    #[derive(Clone, Copy)]
+    pub struct EntryFlags: u8 {
+        /// Entry V_BIT flags.
+        const VALID = 1 << 0;
 
-impl EntryFlag {
-    const V_BIT: u8 = 1 << 0;
-    const R_BIT: u8 = 1 << 1;
-    const W_BIT: u8 = 1 << 2;
-    const E_BIT: u8 = 1 << 3;
+        /// Entry R_BIT flags.
+        const READ = 1 << 1;
 
-    fn is_valid(&self) -> bool {
-        self.is_set(EntryFlag::V_BIT)
+        /// Entry W_BIT flags.
+        const WRITE = 1 << 2;
+
+        /// Entry X_BIT flags.
+        const EXECUTE = 1 << 3;
+
+        /// Entry U_BIT flags.
+        const USER = 1 << 4;
+
+        /// Entry G_BIT flags.
+        const GLOBAL = 1 << 5;
+
+        /// Entry A_BIT flags.
+        const ACCESS = 1 << 6;
+
+        /// Entry D_BIT flags.
+        const DIRTY = 1 << 7;
     }
+}
 
-    fn is_readable(&self) -> bool {
-        self.is_set(EntryFlag::R_BIT)
-    }
-
-    fn is_writeable(&self) -> bool {
-        self.is_set(EntryFlag::W_BIT)
-    }
-
-    fn is_executable(&self) -> bool {
-        self.is_set(EntryFlag::E_BIT)
-    }
-
-    fn is_leaf(&self) -> bool {
-        self.is_readable() | self.is_writeable() | self.is_executable()
-    }
-
-    fn is_set(&self, bits: u8) -> bool {
-        self.0 & bits != 0
-    }
-
-    fn set_valid(self, v: bool) -> Self {
-        self.set(EntryFlag::V_BIT, v)
-    }
-
-    /// Set the R_BIT of the flag.
-    pub fn set_readable(self, v: bool) -> Self {
-        self.set(EntryFlag::R_BIT, v)
-    }
-
-    /// Set the W_BIT of the flag.
-    pub fn set_writeable(self, v: bool) -> Self {
-        self.set(EntryFlag::W_BIT, v)
-    }
-
-    /// Set the E_BIT of the flag.
-    pub fn set_executable(self, v: bool) -> Self {
-        self.set(EntryFlag::E_BIT, v)
-    }
-
-    fn set(self, bits: u8, v: bool) -> Self {
-        if v {
-            Self(self.0 | bits)
-        } else {
-            Self(self.0 & !bits)
-        }
+impl EntryFlags {
+    /// Returns true if any one of the READ, WRITE, or EXECUTE flags is enable.
+    pub fn is_leaf(&self) -> bool {
+        self.intersects(Self::READ | Self::WRITE | Self::EXECUTE)
     }
 }
 
@@ -231,28 +206,25 @@ impl EntryFlag {
 pub struct TableEntry(usize);
 
 impl TableEntry {
+    fn new(addr: PhysAddr, flags: EntryFlags) -> Self {
+        let ppns = addr.ppns();
+        Self(ppns[2] << 28 | ppns[1] << 19 | ppns[0] << 10 | flags.bits() as usize)
+    }
+
     fn translate(&self, vaddr: VirtAddr, lvl: usize) -> PhysAddr {
         let offset_mask = (1 << (12 + lvl * 9)) - 1;
         let offset = vaddr.0 & offset_mask;
-        let ppns = self.get_address() & !offset_mask;
+        let ppns = self.addr() & !offset_mask;
         PhysAddr(ppns | offset)
     }
 
-    fn get_address(&self) -> usize {
+    fn addr(&self) -> usize {
         (self.0 & !0x3ff) << 2
     }
 
-    fn set_address(self, addr: PhysAddr) -> Self {
-        let ppns = addr.ppns();
-        Self(self.0 | (ppns[2]) << 28 | (ppns[1]) << 19 | (ppns[0]) << 10)
-    }
-
-    fn get_flags(&self) -> EntryFlag {
-        EntryFlag((self.0 & 0xff) as u8)
-    }
-
-    fn set_flags(self, flags: EntryFlag) -> Self {
-        Self(self.0 | flags.0 as usize)
+    fn flags(&self) -> EntryFlags {
+        let bits = self.0 & 0xff;
+        EntryFlags::from_bits_retain(bits as u8)
     }
 }
 /// A physical memory address.
@@ -290,16 +262,6 @@ impl PhysAddr {
             self.0 >> 21 & 0x1ff,
             self.0 >> 30 & 0x3ff_ffff,
         ]
-    }
-
-    /// Offset in bytes between this physical address and another one.
-    pub fn offset_from(self, other: Self) -> isize {
-        self.0 as isize - other.0 as isize
-    }
-
-    /// Derives a raw pointer from this address.
-    pub fn as_ptr_mut<T>(self) -> *mut T {
-        self.0 as *mut T
     }
 }
 
