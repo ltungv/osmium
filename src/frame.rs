@@ -292,7 +292,7 @@ impl FrameDescriptor {
 
     /// Return true of the given flag is set.
     fn has(&self, flags: FrameDescriptorFlags) -> bool {
-        self.0 & flags.bits() != 0
+        self.0 & flags.bits() == flags.bits()
     }
 
     /// Clear all previously set flags.
