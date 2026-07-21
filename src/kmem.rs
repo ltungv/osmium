@@ -58,6 +58,12 @@ impl AllocationNode {
     /// Flag the current node as being taken.
     pub const TAKEN_FLAG_MASK: usize = 1 << 63;
 
+    /// Returns an immutable raw pointer to the next allocation node.
+    ///
+    /// # Safety
+    ///
+    /// The pointer to the current allocation node, `*mut Self`, must be valid and points to an
+    /// initialized `AllocationNode` that correctly represents the size of the allocated region.
     pub unsafe fn next(ptr: *const Self) -> *const Self {
         let node = unsafe { &*ptr };
         let ptr = ptr.cast::<u8>();
@@ -65,6 +71,12 @@ impl AllocationNode {
         ptr.cast::<AllocationNode>()
     }
 
+    /// Returns a mutable raw pointer to the next allocation node.
+    ///
+    /// # Safety
+    ///
+    /// The pointer to the current allocation node, `*mut Self`, must be valid and points to an
+    /// initialized `AllocationNode` that correctly represents the size of the allocated region.
     pub unsafe fn next_mut(ptr: *mut Self) -> *mut Self {
         let node = unsafe { &*ptr };
         let ptr = ptr.cast::<u8>();
@@ -242,10 +254,12 @@ impl Allocator {
         })
     }
 
+    /// Returns the first and last memory address of the kernel.
     pub fn mem_region(&self) -> (usize, usize) {
         (self.alloc_list.head(), self.alloc_list.tail())
     }
 
+    /// Returns the identification of the root frame of the kernel.
     pub fn root_frame_id(&self) -> FrameId {
         self.root_frame_id
     }

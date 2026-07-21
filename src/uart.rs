@@ -14,7 +14,6 @@ macro_rules! print {
         use core::fmt::Write;
         let mut driver = $crate::uart::driver();
         let _ = write!(driver, $($args)+);
-
     }};
 }
 
@@ -90,6 +89,10 @@ impl UartDriver {
     const PSD: usize = 0b101;
 
     /// Create a new UART driver with the given base address.
+    ///
+    /// # Safety
+    ///
+    /// The given address must be the memory-mapped physical address of the UART hardware.
     pub const unsafe fn new(addr: usize) -> Self {
         let ptr = addr as *mut [u8; 8];
         Self(unsafe { &mut *ptr })
