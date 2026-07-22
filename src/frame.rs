@@ -10,7 +10,7 @@ use core::{
 use bitflags::bitflags;
 use spin::Once;
 
-use crate::{HEAP_SIZE, HEAP_START, align_value};
+use crate::{HEAP_SIZE, HEAP_START, align_value, mem::PhysAddr};
 
 /// Frame size as an exponent of 2.
 pub const FRAME_ORDER: usize = 12;
@@ -66,14 +66,6 @@ impl ops::Add<usize> for FrameId {
     }
 }
 
-impl ops::Sub<Self> for FrameId {
-    type Output = usize;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.0 - rhs.0
-    }
-}
-
 impl TryFrom<usize> for FrameId {
     type Error = Error;
 
@@ -83,6 +75,15 @@ impl TryFrom<usize> for FrameId {
             return Err(Error::UnalignedAddress(addr));
         }
         Ok(Self(addr >> FRAME_ORDER))
+    }
+}
+
+impl TryFrom<PhysAddr> for FrameId {
+    type Error = Error;
+
+    fn try_from(addr: PhysAddr) -> Result<Self, Self::Error> {
+        let addr: usize = addr.into();
+        Self::try_from(addr)
     }
 }
 
@@ -240,7 +241,7 @@ impl FrameAllocator {
     /// page region that was previously allocated by this frame allocator.
     pub unsafe fn dealloc(&self, id: FrameId) {
         assert!(id >= self.alloc_start);
-        let mut offset = id - self.alloc_start;
+        let mut offset = id.0 - self.alloc_start.0;
         let mut descriptors = self.descriptors.lock();
         while descriptors[offset].has(FrameDescriptorFlags::TAKEN)
             && !descriptors[offset].has(FrameDescriptorFlags::LAST)
@@ -255,7 +256,7 @@ impl FrameAllocator {
         descriptors[offset].clear();
     }
 
-    /// find a first address of a contiguous region of one or more free pages.
+    /// Find a first address of a contiguous region of one or more free pages.
     fn find_free_pages(descriptors: &[FrameDescriptor], pages: usize) -> Option<usize> {
         assert!(pages > 0);
         let mut current_pages_begin = None;

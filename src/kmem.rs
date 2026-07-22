@@ -17,7 +17,8 @@ use crate::{
     BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
     KERNEL_STACK_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START, align_value,
     frame::{self, FRAME_SIZE, FrameAllocator, FrameId},
-    sv39::{self, EntryFlags, PageTable, PhysAddr, VirtAddr},
+    mem::{PhysAddr, VirtAddr},
+    sv39::{self, EntryFlags, PageTable},
     uart,
 };
 
@@ -179,7 +180,7 @@ impl NodePtr {
         unsafe { self.0.as_mut() }
     }
 
-    /// Return the raw pointer for formatting / address comparison.
+    /// Return the raw pointer.
     fn as_raw(self) -> *const AllocationNode {
         self.0.as_ptr()
     }
@@ -369,7 +370,7 @@ impl Allocator {
 
     /// Translates a virtual memory address into a physical one.
     pub fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let table_ptr = self.root_frame_id().addr() as *mut PageTable;
+        let table_ptr = unsafe { PhysAddr(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
         // SAFETY: `root_frame_id` was allocated via `zalloc(1)` in `new` and
         // is valid for the lifetime of the `Allocator`.
         let table = unsafe { &*table_ptr };
@@ -406,7 +407,7 @@ impl Allocator {
     /// Identity map all sections of the kernel's memory.
     fn identity_map(&self) -> Result<(), sv39::Error> {
         let (kmem_start, kmem_end) = self.mem_region();
-        let table_ptr = self.root_frame_id().addr() as *mut PageTable;
+        let table_ptr = unsafe { PhysAddr(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
         // SAFETY: `root_frame_id` was allocated via `zalloc(1)` in `new` and
         // is valid for the lifetime of the `Allocator`. No other code mutates
         // this page table concurrently (called during single-threaded init).
