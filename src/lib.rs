@@ -16,6 +16,7 @@ extern crate alloc;
 
 pub mod frame;
 pub mod kmem;
+pub mod mem;
 pub mod rt;
 pub mod sv39;
 pub mod uart;

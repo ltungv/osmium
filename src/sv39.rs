@@ -1,12 +1,13 @@
 //! Functions and types for managing virtual pages.
 
-use core::{fmt, ops::Add};
+use core::fmt;
 
 use bitflags::bitflags;
 
 use crate::{
     align_value,
     frame::{FRAME_ORDER, FRAME_SIZE, FrameAllocator, FrameId},
+    mem::{PhysAddr, VirtAddr},
 };
 
 /// Errors occurs when working with the page table.
@@ -62,7 +63,7 @@ impl PageTable {
             }
 
             // Go to the next entry.
-            let table = entry.addr() as *mut PageTable;
+            let table = unsafe { entry.addr().as_mut_ptr::<PageTable>() };
             entry = unsafe { &mut (*table).0[*vpn_next] };
         }
 
@@ -81,7 +82,7 @@ impl PageTable {
             // Get the page table.
             let table_lvl1_addr = entry_lvl2.addr();
             let table_lvl1 = {
-                let table = table_lvl1_addr as *mut PageTable;
+                let table = unsafe { table_lvl1_addr.as_mut_ptr::<PageTable>() };
                 unsafe { table.as_mut().unwrap() }
             };
             // Since the number of levels is constant, we op for nesting loops instead of recursion
@@ -133,7 +134,7 @@ impl PageTable {
                 return Some(entry.translate(vaddr, i));
             }
             // Go to the next entry.
-            let table = entry.addr() as *mut PageTable;
+            let table = unsafe { entry.addr().as_mut_ptr::<PageTable>() };
             let vpn_next = vpn_parts[i - 1];
             entry = unsafe { &mut (*table).0[vpn_next] };
         }
@@ -214,91 +215,16 @@ impl TableEntry {
     fn translate(&self, vaddr: VirtAddr, lvl: usize) -> PhysAddr {
         let offset_mask = (1 << (12 + lvl * 9)) - 1;
         let offset = vaddr.0 & offset_mask;
-        let ppns = self.addr() & !offset_mask;
+        let ppns = self.addr().0 & !offset_mask;
         PhysAddr(ppns | offset)
     }
 
-    fn addr(&self) -> usize {
-        (self.0 & !0x3ff) << 2
+    fn addr(&self) -> PhysAddr {
+        PhysAddr((self.0 & !0x3ff) << 2)
     }
 
     fn flags(&self) -> EntryFlags {
         let bits = self.0 & 0xff;
         EntryFlags::from_bits_retain(bits as u8)
-    }
-}
-/// A physical memory address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PhysAddr(usize);
-
-impl<T> From<*const T> for PhysAddr {
-    fn from(addr: *const T) -> Self {
-        Self(addr.addr())
-    }
-}
-
-impl From<usize> for PhysAddr {
-    fn from(addr: usize) -> Self {
-        Self(addr)
-    }
-}
-
-impl Add<usize> for PhysAddr {
-    type Output = Self;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        Self(self.0 + rhs)
-    }
-}
-
-impl PhysAddr {
-    /// The zero physical address.
-    pub const ZERO: Self = Self(0);
-
-    /// Decomposes the physical address into physical page numbers (PPNs).
-    pub fn ppns(self) -> [usize; 3] {
-        [
-            self.0 >> 12 & 0x1ff,
-            self.0 >> 21 & 0x1ff,
-            self.0 >> 30 & 0x3ff_ffff,
-        ]
-    }
-}
-
-/// A virtual memory address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VirtAddr(usize);
-
-impl<T> From<*const T> for VirtAddr {
-    fn from(addr: *const T) -> Self {
-        Self(addr.addr())
-    }
-}
-
-impl From<usize> for VirtAddr {
-    fn from(addr: usize) -> Self {
-        Self(addr)
-    }
-}
-
-impl Add<usize> for VirtAddr {
-    type Output = Self;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        Self(self.0 + rhs)
-    }
-}
-
-impl VirtAddr {
-    /// The zero virtual address.
-    pub const ZERO: Self = Self(0);
-
-    /// Decompose the virtual address into virtual page numbers (VPNs).
-    pub fn vpns(self) -> [usize; 3] {
-        [
-            self.0 >> 12 & 0x1ff,
-            self.0 >> 21 & 0x1ff,
-            self.0 >> 30 & 0x1ff,
-        ]
     }
 }

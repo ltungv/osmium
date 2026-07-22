@@ -8,9 +8,8 @@ use crate::{
     HEAP_START,
     frame::{self, frame_allocator},
     kmem::{self, kmem},
-    print, println,
-    sv39::PhysAddr,
-    uart,
+    mem::PhysAddr,
+    print, println, uart,
 };
 
 #[unsafe(no_mangle)]
