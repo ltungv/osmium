@@ -23,21 +23,21 @@ use crate::{
 };
 
 /// Number of pages used for the kernel memory.
-pub const PAGE_COUNT: usize = 64;
+pub(crate) const PAGE_COUNT: usize = 64;
 
 static KMEM: Once<SpinMutex<Allocator>> = Once::new();
 
 /// Initialize the memory management system.
-pub fn initialize() {
+pub(crate) fn initialize() {
     KMEM.call_once(|| {
-        let alloc = Allocator::new(frame::frame_allocator()).expect("kernel memory is allocated");
-        alloc.identity_map().expect("kernel memory is mapped");
+        let alloc = Allocator::new(frame::frame_allocator()).expect("initialized kernel memory");
+        alloc.identity_map().expect("mapped kernel memory");
         SpinMutex::new(alloc)
     });
 }
 
 /// Get a reference to the kernel memory.
-pub fn kmem() -> SpinMutexGuard<'static, Allocator> {
+pub(crate) fn kmem() -> SpinMutexGuard<'static, Allocator> {
     KMEM.get().expect("initialized kernel memory").lock()
 }
 
@@ -55,34 +55,34 @@ fn alloc_error(l: Layout) -> ! {
 
 /// Metadata for a region of byte-level allocation.
 #[derive(Debug, Default)]
-pub struct AllocationNode(usize);
+pub(crate) struct AllocationNode(usize);
 
 impl AllocationNode {
     /// Flag the current node as being taken.
-    pub const TAKEN_FLAG_MASK: usize = 1 << 63;
+    pub(crate) const TAKEN_FLAG_MASK: usize = 1 << 63;
 
     /// Clear the taken flag.
-    pub fn free(&mut self) {
+    pub(crate) fn free(&mut self) {
         self.0 &= !Self::TAKEN_FLAG_MASK;
     }
 
     /// Return true if the node is free.
-    pub fn is_free(&self) -> bool {
+    pub(crate) fn is_free(&self) -> bool {
         self.0 & Self::TAKEN_FLAG_MASK == 0
     }
 
     /// Set the taken flag.
-    pub fn take(&mut self) {
+    pub(crate) fn take(&mut self) {
         self.0 |= Self::TAKEN_FLAG_MASK;
     }
 
     /// Return true if the node is taken.
-    pub fn is_taken(&self) -> bool {
+    pub(crate) fn is_taken(&self) -> bool {
         self.0 & Self::TAKEN_FLAG_MASK != 0
     }
 
     /// Set the node size.
-    pub fn set_size(&mut self, size: usize) {
+    pub(crate) fn set_size(&mut self, size: usize) {
         let is_taken = self.is_taken();
         self.0 = size & !Self::TAKEN_FLAG_MASK;
         if is_taken {
@@ -91,7 +91,7 @@ impl AllocationNode {
     }
 
     /// Get the node size.
-    pub fn get_size(&self) -> usize {
+    pub(crate) fn get_size(&self) -> usize {
         self.0 & !Self::TAKEN_FLAG_MASK
     }
 }
@@ -203,12 +203,12 @@ unsafe impl Send for AllocationList {}
 
 impl AllocationList {
     /// Get the memory address of the list head.
-    pub fn head_addr(&self) -> usize {
+    pub(crate) fn head_addr(&self) -> usize {
         self.head.as_raw() as usize
     }
 
     /// Get the memory address of the list tail.
-    pub fn tail_addr(&self) -> usize {
+    pub(crate) fn tail_addr(&self) -> usize {
         self.tail as usize
     }
 
@@ -258,8 +258,32 @@ impl<'a> Iterator for NodeIter<'a> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum Error {
+    /// Error returned by the frame module.
+    FrameError(frame::Error),
+
+    /// Out of free nodes with the requested size.
+    OutOfMemory,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FrameError(e) => write!(f, "{e}"),
+            Self::OutOfMemory => write!(f, "out of memory"),
+        }
+    }
+}
+
+impl From<frame::Error> for Error {
+    fn from(error: frame::Error) -> Self {
+        Self::FrameError(error)
+    }
+}
+
 /// Metadata for the kernel's memory.
-pub struct Allocator {
+pub(crate) struct Allocator {
     alloc_list: AllocationList,
     root_frame_id: FrameId,
 }
@@ -273,7 +297,7 @@ impl fmt::Debug for Allocator {
 
 impl Allocator {
     /// Initialize the kernel's memory.
-    pub fn new(frame_allocator: &FrameAllocator) -> Option<Self> {
+    pub(crate) fn new(frame_allocator: &FrameAllocator) -> Result<Self, Error> {
         let head_frame = frame_allocator.zalloc(PAGE_COUNT)?;
         let tail_frame = head_frame + PAGE_COUNT;
 
@@ -297,24 +321,24 @@ impl Allocator {
         let alloc_list = AllocationList { head, tail };
         let root_frame_id = frame_allocator.zalloc(1)?;
 
-        Some(Self {
+        Ok(Self {
             alloc_list,
             root_frame_id,
         })
     }
 
     /// Returns the first and last memory address of the kernel.
-    pub fn mem_region(&self) -> (usize, usize) {
+    pub(crate) fn mem_region(&self) -> (usize, usize) {
         (self.alloc_list.head_addr(), self.alloc_list.tail_addr())
     }
 
     /// Returns the identification of the root frame of the kernel.
-    pub fn root_frame_id(&self) -> FrameId {
+    pub(crate) fn root_frame_id(&self) -> FrameId {
         self.root_frame_id
     }
 
     /// Allocate `size` bytes (8-byte aligned).
-    pub fn alloc(&mut self, size: usize) -> Option<*mut u8> {
+    pub(crate) fn alloc(&mut self, size: usize) -> Result<*mut u8, Error> {
         let size = align_value(size, 3) + size_of::<AllocationNode>();
         let tail = self.alloc_list.tail;
 
@@ -335,25 +359,25 @@ impl Allocator {
                 } else {
                     node.set_size(node_size);
                 }
-                return Some(node_ptr.user_ptr());
+                return Ok(node_ptr.user_ptr());
             }
         }
-        None
+        Err(Error::OutOfMemory)
     }
 
     /// Allocate sub-page level allocation based on bytes and zero the memory.
-    pub fn zalloc(&mut self, size: usize) -> Option<*mut u8> {
+    pub(crate) fn zalloc(&mut self, size: usize) -> Result<*mut u8, Error> {
         let addr = self.alloc(size)?;
         // SAFETY: `addr` points to `size` bytes of usable payload inside the
         // heap region, as returned by `alloc` above.
         unsafe {
             core::ptr::write_bytes(addr, 0, size);
         }
-        Some(addr)
+        Ok(addr)
     }
 
     /// Deallocate the node starting at `ptr`.
-    pub fn dealloc(&mut self, ptr: *mut u8) {
+    pub(crate) fn dealloc(&mut self, ptr: *mut u8) {
         if ptr.is_null() {
             return;
         }
@@ -369,7 +393,7 @@ impl Allocator {
     }
 
     /// Translates a virtual memory address into a physical one.
-    pub fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
+    pub(crate) fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         let table_ptr = unsafe { PhysAddr(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
         // SAFETY: `root_frame_id` was allocated via `zalloc(1)` in `new` and
         // is valid for the lifetime of the `Allocator`.
@@ -378,7 +402,7 @@ impl Allocator {
     }
 
     /// Merge adjacent free chunks into a bigger chunk.
-    pub fn coalesce(&mut self) {
+    pub(crate) fn coalesce(&mut self) {
         let tail = self.alloc_list.tail;
         let mut current = Some(self.alloc_list.head);
 
@@ -487,7 +511,7 @@ unsafe impl GlobalAlloc for OsGlobalAlloc {
         // We align to the next page size so that when
         // we divide by PAGE_SIZE, we get exactly the number
         // of pages necessary.
-        kmem().zalloc(layout.size()).unwrap()
+        kmem().zalloc(layout.size()).expect("allocated layout")
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {

@@ -25,13 +25,13 @@ macro_rules! println {
 }
 
 /// Default UART base address on the `virt` machine in QEMU.
-pub const BASE_ADDRESS: usize = 0x1000_0000;
+pub(crate) const BASE_ADDRESS: usize = 0x1000_0000;
 
 /// Global UART driver instance.
 static DRIVER: Once<SpinMutex<UartDriver>> = Once::new();
 
 /// Initialize the global UART driver state.
-pub fn initialize() {
+pub(crate) fn initialize() {
     DRIVER.call_once(|| {
         let mut driver = unsafe { UartDriver::new(BASE_ADDRESS) };
         driver.initialize();
@@ -40,13 +40,13 @@ pub fn initialize() {
 }
 
 /// Acquire unique access to the global UART driver.
-pub fn driver() -> SpinMutexGuard<'static, UartDriver> {
+pub(crate) fn driver() -> SpinMutexGuard<'static, UartDriver> {
     DRIVER.get().expect("initialized UART driver").lock()
 }
 
 /// A driver for NS16550D (Universal Asynchronous Receiver/Transmitter with FIFOs).
 #[derive(Debug)]
-pub struct UartDriver(&'static mut [u8; 8]);
+pub(crate) struct UartDriver(&'static mut [u8; 8]);
 
 impl UartDriver {
     /// Receiver holding register.
@@ -93,13 +93,13 @@ impl UartDriver {
     /// # Safety
     ///
     /// The given address must be the memory-mapped physical address of the UART hardware.
-    pub const unsafe fn new(addr: usize) -> Self {
+    pub(crate) const unsafe fn new(addr: usize) -> Self {
         let ptr = addr as *mut [u8; 8];
         Self(unsafe { &mut *ptr })
     }
 
     /// Put a byte into the transmitter holding register (thr) blocking until the byte is ready to be sent.
-    pub fn put(&mut self, byte: u8) -> Option<()> {
+    pub(crate) fn put(&mut self, byte: u8) -> Option<()> {
         if self.rd_reg(Self::LSR) & (1 << 6) == 0 {
             None
         } else {
@@ -109,7 +109,7 @@ impl UartDriver {
     }
 
     /// Get the next available byte from the receiver buffer register (rbr).
-    pub fn get(&self) -> Option<u8> {
+    pub(crate) fn get(&self) -> Option<u8> {
         if self.rd_reg(Self::LSR) & (1 << 0) == 0 {
             None
         } else {
