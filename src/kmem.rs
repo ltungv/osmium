@@ -394,7 +394,8 @@ impl Allocator {
 
     /// Translates a virtual memory address into a physical one.
     pub(crate) fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let table_ptr = unsafe { PhysAddr(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
+        let table_ptr =
+            unsafe { PhysAddr::from(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
         // SAFETY: `root_frame_id` was allocated via `zalloc(1)` in `new` and
         // is valid for the lifetime of the `Allocator`.
         let table = unsafe { &*table_ptr };
@@ -431,7 +432,8 @@ impl Allocator {
     /// Identity map all sections of the kernel's memory.
     fn identity_map(&self) -> Result<(), sv39::Error> {
         let (kmem_start, kmem_end) = self.mem_region();
-        let table_ptr = unsafe { PhysAddr(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
+        let table_ptr =
+            unsafe { PhysAddr::from(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
         // SAFETY: `root_frame_id` was allocated via `zalloc(1)` in `new` and
         // is valid for the lifetime of the `Allocator`. No other code mutates
         // this page table concurrently (called during single-threaded init).
