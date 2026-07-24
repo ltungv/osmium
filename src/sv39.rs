@@ -218,13 +218,13 @@ impl TableEntry {
 
     fn translate(&self, vaddr: VirtAddr, lvl: usize) -> PhysAddr {
         let offset_mask = (1 << (12 + lvl * 9)) - 1;
-        let offset = vaddr.0 & offset_mask;
-        let ppns = self.addr().0 & !offset_mask;
-        PhysAddr(ppns | offset)
+        let offset = vaddr.get() & offset_mask;
+        let ppns = self.addr().get() & !offset_mask;
+        PhysAddr::from(ppns | offset)
     }
 
     fn addr(&self) -> PhysAddr {
-        PhysAddr((self.0 & !0x3ff) << 2)
+        PhysAddr::from((self.0 & !0x3ff) << 2)
     }
 
     fn flags(&self) -> EntryFlags {

@@ -4,7 +4,7 @@ use core::ops::Add;
 
 /// A physical memory address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PhysAddr(pub usize);
+pub struct PhysAddr(usize);
 
 impl<T> From<*const T> for PhysAddr {
     fn from(addr: *const T) -> Self {
@@ -62,11 +62,15 @@ impl PhysAddr {
             self.0 >> 30 & 0x3ff_ffff,
         ]
     }
+
+    pub fn get(&self) -> usize {
+        self.0
+    }
 }
 
 /// A virtual memory address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VirtAddr(pub usize);
+pub struct VirtAddr(usize);
 
 impl<T> From<*const T> for VirtAddr {
     fn from(addr: *const T) -> Self {
@@ -105,5 +109,9 @@ impl VirtAddr {
             self.0 >> 21 & 0x1ff,
             self.0 >> 30 & 0x1ff,
         ]
+    }
+
+    pub fn get(&self) -> usize {
+        self.0
     }
 }
