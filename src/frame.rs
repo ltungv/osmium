@@ -13,33 +13,33 @@ use spin::Once;
 use crate::{HEAP_SIZE, HEAP_START, align_value, mem::PhysAddr};
 
 /// Frame size as an exponent of 2.
-pub const FRAME_ORDER: usize = 12;
+pub(crate) const FRAME_ORDER: usize = 12;
 
 /// Frame size in bytes.
-pub const FRAME_SIZE: usize = 1 << FRAME_ORDER;
+pub(crate) const FRAME_SIZE: usize = 1 << FRAME_ORDER;
 
 static ALLOCATOR: Once<FrameAllocator> = Once::new();
 
 /// Initialize the global frame allocator.
-pub fn initialize() {
+pub(crate) fn initialize() {
     ALLOCATOR.call_once(|| unsafe {
-        let heap_start = NonZero::new(HEAP_START);
-        let heap_size = NonZero::new(HEAP_SIZE);
-        FrameAllocator::new(
-            heap_start.expect("non-zero heap start"),
-            heap_size.expect("non-zero heap size"),
-        )
+        let heap_start = NonZero::new(HEAP_START).expect("non-zero heap start");
+        let heap_size = NonZero::new(HEAP_SIZE).expect("non-zero heap size");
+        FrameAllocator::new(heap_start, heap_size).expect("initialized frame allocator")
     });
 }
 
 /// Grabs the global physical frame allocator.
-pub fn frame_allocator() -> &'static FrameAllocator {
+pub(crate) fn frame_allocator() -> &'static FrameAllocator {
     ALLOCATOR.get().expect("initialized frame allocator")
 }
 
 /// Errors from interacting with physical frames.
 #[derive(Debug)]
 pub enum Error {
+    /// Out of contiguous free physical frames.
+    OutOfMemory,
+
     /// Frame address is not aligned to `FRAME_SIZE`.
     UnalignedAddress(usize),
 }
@@ -47,7 +47,10 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::UnalignedAddress(addr) => {
+            Self::OutOfMemory => {
+                write!(f, "out of memory")
+            }
+            Self::UnalignedAddress(addr) => {
                 write!(f, "0x{addr:x} is not aligned to {FRAME_SIZE}")
             }
         }
@@ -101,7 +104,7 @@ impl FrameId {
 }
 
 /// An allocator for 4096-byte physical frames.
-pub struct FrameAllocator {
+pub(crate) struct FrameAllocator {
     descriptors: spin::Mutex<&'static mut [FrameDescriptor]>,
     alloc_start: FrameId,
 }
@@ -183,13 +186,15 @@ impl FrameAllocator {
     ///
     /// Caller must guarantee that the memory region from `heap_start` to `heap_start + heap_size`
     /// is physically available for this allocator to manage.
-    pub unsafe fn new(heap_start: NonZero<usize>, heap_size: NonZero<usize>) -> Self {
+    pub(crate) unsafe fn new(
+        heap_start: NonZero<usize>,
+        heap_size: NonZero<usize>,
+    ) -> Result<Self, Error> {
         let pages = heap_size.get() / (size_of::<FrameDescriptor>() + FRAME_SIZE);
         let alloc_start = FrameId::try_from(align_value(
             heap_start.get() + size_of::<FrameDescriptor>() * pages,
             FRAME_ORDER,
-        ))
-        .expect("allocation start address is aligned");
+        ))?;
 
         let descriptors = unsafe {
             slice::from_raw_parts_mut(heap_start.get() as *mut MaybeUninit<FrameDescriptor>, pages)
@@ -206,30 +211,29 @@ impl FrameAllocator {
             >(descriptors)
         };
 
-        Self {
+        Ok(Self {
             alloc_start,
             descriptors: spin::Mutex::new(descriptors),
-        }
+        })
     }
 
     /// Allocates a contiguous region of `pages` and returns the address at the start of the region.
     /// If there's not enough memory, returns `None`.
-    pub fn alloc(&self, pages: usize) -> Option<FrameId> {
+    pub(crate) fn alloc(&self, pages: usize) -> Result<FrameId, Error> {
         let mut descriptors = self.descriptors.lock();
-        Self::find_free_pages(&descriptors, pages).map(|offset| {
-            descriptors[offset + pages - 1].set(FrameDescriptorFlags::LAST);
-            for i in offset..offset + pages {
-                descriptors[i].set(FrameDescriptorFlags::TAKEN);
-            }
-            self.alloc_start + offset
-        })
+        let offset = Self::find_free_pages(&descriptors, pages).ok_or(Error::OutOfMemory)?;
+        descriptors[offset + pages - 1].set(FrameDescriptorFlags::LAST);
+        for i in offset..offset + pages {
+            descriptors[i].set(FrameDescriptorFlags::TAKEN);
+        }
+        Ok(self.alloc_start + offset)
     }
 
     /// Allocates a contiguous region of `pages`, initializes the region to 0, and returns the address
     /// at the start of the region. If there's not enough memory, returns `None`.
-    pub fn zalloc(&self, pages: usize) -> Option<FrameId> {
-        self.alloc(pages).inspect(|frame_id| unsafe {
-            core::ptr::write_bytes(frame_id.addr() as *mut u8, 0, FRAME_SIZE * pages);
+    pub(crate) fn zalloc(&self, pages: usize) -> Result<FrameId, Error> {
+        self.alloc(pages).inspect(|id| unsafe {
+            core::ptr::write_bytes(id.addr() as *mut u8, 0, FRAME_SIZE * pages);
         })
     }
 
@@ -239,7 +243,7 @@ impl FrameAllocator {
     ///
     /// Caller must make sure this function is only called with the starting address of a contiguous
     /// page region that was previously allocated by this frame allocator.
-    pub unsafe fn dealloc(&self, id: FrameId) {
+    pub(crate) unsafe fn dealloc(&self, id: FrameId) {
         assert!(id >= self.alloc_start);
         let mut offset = id.0 - self.alloc_start.0;
         let mut descriptors = self.descriptors.lock();
