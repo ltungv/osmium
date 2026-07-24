@@ -9,17 +9,18 @@
     missing_debug_implementations,
     rust_2018_idioms,
     rust_2021_compatibility,
-    rust_2024_compatibility
+    rust_2024_compatibility,
+    unreachable_pub
 )]
 
 extern crate alloc;
 
-pub mod frame;
-pub mod kmem;
-pub mod mem;
-pub mod rt;
-pub mod sv39;
-pub mod uart;
+mod frame;
+mod kmem;
+mod mem;
+mod rt;
+mod sv39;
+mod uart;
 
 unsafe extern "C" {
     /// First memory address in the `.text` section.
