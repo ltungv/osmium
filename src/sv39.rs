@@ -69,7 +69,7 @@ impl PageTable {
             }
 
             // Go to the next entry.
-            let table = unsafe { entry.addr().as_mut_ptr::<PageTable>() };
+            let table = unsafe { entry.addr().as_ptr_mut::<PageTable>() };
             entry = unsafe { &mut (*table).0[*vpn_next] };
         }
 
@@ -88,8 +88,8 @@ impl PageTable {
             // Get the page table.
             let table_lvl1_addr = entry_lvl2.addr();
             let table_lvl1 = {
-                let table = unsafe { table_lvl1_addr.as_mut_ptr::<PageTable>() };
-                unsafe { table.as_mut().ok_or(Error::InvalidState)? }
+                let table = unsafe { table_lvl1_addr.as_ptr::<PageTable>() };
+                unsafe { table.as_ref().ok_or(Error::InvalidState)? }
             };
             // Since the number of levels is constant, we op for nesting loops instead of recursion
             // If we recursively call `unmap` again on inner tables, we would make extraneous
@@ -138,9 +138,9 @@ impl PageTable {
                 return Some(entry.translate(vaddr, i));
             }
             // Go to the next entry.
-            let table = unsafe { entry.addr().as_mut_ptr::<PageTable>() };
+            let table = unsafe { entry.addr().as_ptr::<PageTable>() };
             let vpn_next = vpn_parts[i - 1];
-            entry = unsafe { &mut (*table).0[vpn_next] };
+            entry = unsafe { &(*table).0[vpn_next] };
         }
         None
     }
