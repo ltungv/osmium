@@ -395,7 +395,7 @@ impl Allocator {
     /// Translates a virtual memory address into a physical one.
     pub(crate) fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         let table_ptr =
-            unsafe { PhysAddr::from(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
+            unsafe { PhysAddr::from(self.root_frame_id().addr()).as_ptr::<PageTable>() };
         // SAFETY: `root_frame_id` was allocated via `zalloc(1)` in `new` and
         // is valid for the lifetime of the `Allocator`.
         let table = unsafe { &*table_ptr };
@@ -432,14 +432,15 @@ impl Allocator {
     /// Identity map all sections of the kernel's memory.
     fn identity_map(&self) -> Result<(), sv39::Error> {
         let (kmem_start, kmem_end) = self.mem_region();
-        let table_ptr =
-            unsafe { PhysAddr::from(self.root_frame_id().addr()).as_mut_ptr::<PageTable>() };
+        let root_table_ptr =
+            unsafe { PhysAddr::from(self.root_frame_id().addr()).as_ptr_mut::<PageTable>() };
+
         // SAFETY: `root_frame_id` was allocated via `zalloc(1)` in `new` and
         // is valid for the lifetime of the `Allocator`. No other code mutates
         // this page table concurrently (called during single-threaded init).
-        let root = unsafe { &mut *table_ptr };
+        let root_table = unsafe { &mut *root_table_ptr };
 
-        root.map(
+        root_table.map(
             frame::frame_allocator(),
             uart::BASE_ADDRESS.into(),
             uart::BASE_ADDRESS.into(),
@@ -447,7 +448,7 @@ impl Allocator {
             0,
         )?;
 
-        root.id_map_range(
+        root_table.id_map_range(
             frame::frame_allocator(),
             kmem_start,
             kmem_end,
@@ -457,42 +458,42 @@ impl Allocator {
         // SAFETY: the linker-script symbols below are valid addresses
         // provided by the linker and represent the kernel's memory layout.
         unsafe {
-            root.id_map_range(
+            root_table.id_map_range(
                 frame::frame_allocator(),
                 HEAP_START,
                 HEAP_START + HEAP_SIZE,
                 EntryFlags::READ | EntryFlags::WRITE,
             )?;
 
-            root.id_map_range(
+            root_table.id_map_range(
                 frame::frame_allocator(),
                 TEXT_START,
                 TEXT_END,
                 EntryFlags::READ | EntryFlags::EXECUTE,
             )?;
 
-            root.id_map_range(
+            root_table.id_map_range(
                 frame::frame_allocator(),
                 RODATA_START,
                 RODATA_END,
                 EntryFlags::READ | EntryFlags::EXECUTE,
             )?;
 
-            root.id_map_range(
+            root_table.id_map_range(
                 frame::frame_allocator(),
                 DATA_START,
                 DATA_END,
                 EntryFlags::READ | EntryFlags::WRITE,
             )?;
 
-            root.id_map_range(
+            root_table.id_map_range(
                 frame::frame_allocator(),
                 BSS_START,
                 BSS_END,
                 EntryFlags::READ | EntryFlags::WRITE,
             )?;
 
-            root.id_map_range(
+            root_table.id_map_range(
                 frame::frame_allocator(),
                 KERNEL_STACK_START,
                 KERNEL_STACK_END,

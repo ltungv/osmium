@@ -41,17 +41,17 @@ impl PhysAddr {
     /// # Safety
     ///
     /// The caller must ensure that the physical address points to a valid object.
-    pub unsafe fn as_mut_ptr<T>(self) -> *mut T {
-        self.0 as *mut T
+    pub unsafe fn as_ptr<T>(self) -> *const T {
+        self.0 as *const T
     }
 
-    /// Converts the physical address to a raw const pointer.
+    /// Converts the physical address to a mutable raw pointer.
     ///
     /// # Safety
     ///
     /// The caller must ensure that the physical address points to a valid object.
-    pub unsafe fn as_const_ptr<T>(self) -> *const T {
-        self.0 as *const T
+    pub unsafe fn as_ptr_mut<T>(self) -> *mut T {
+        self.0 as *mut T
     }
 
     /// Decomposes the physical address into physical page numbers (PPNs).
