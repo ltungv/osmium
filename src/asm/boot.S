@@ -72,8 +72,8 @@ _start:
   csrw mie, zero
   # Explicitly disable supervisor interrupts.
   csrw sie, zero
-  # Set machine trap vector base address to `m_trap_vector`.
-  la t0, m_trap_vector
+  # Set machine trap vector base address to `_mtrap`.
+  la t0, _mtrap
   csrw mtvec, t0
   # Configure physical memory protection (PMP).
   li t0, -1
