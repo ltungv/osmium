@@ -45,9 +45,9 @@ pub(crate) fn driver() -> SpinMutexGuard<'static, UartDriver> {
 }
 
 /// A driver for NS16550D (Universal Asynchronous Receiver/Transmitter with FIFOs).
-#[derive(Debug)]
 pub(crate) struct UartDriver(&'static mut [u8; 8]);
 
+#[allow(dead_code)]
 impl UartDriver {
     /// Receiver holding register.
     const RHR: usize = 0b000;
