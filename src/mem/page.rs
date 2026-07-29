@@ -6,15 +6,28 @@ use bitflags::bitflags;
 
 use crate::{
     align_value,
-    frame::{self, FRAME_ORDER, FRAME_SIZE, FrameAllocator, FrameId},
-    mem::{PhysAddr, VirtAddr},
+    mem::{
+        PAGE_SIZE, PAGE_SIZE_BITS,
+        frame::{Allocator, FrameNumber},
+    },
 };
+
+fn get_ppns(addr: usize) -> [usize; 3] {
+    [
+        addr >> 12 & 0x1ff,
+        addr >> 21 & 0x1ff,
+        addr >> 30 & 0x3ff_ffff,
+    ]
+}
+fn get_vpns(addr: usize) -> [usize; 3] {
+    [addr >> 12 & 0x1ff, addr >> 21 & 0x1ff, addr >> 30 & 0x1ff]
+}
 
 /// Errors occurs when working with the page table.
 #[derive(Debug)]
 pub(crate) enum Error {
-    /// Error returned by the frame module.
-    FrameError(frame::Error),
+    /// There's no available frame for a new page table.
+    OutOfMemory,
 
     /// The page table is in an invalid state.
     InvalidState,
@@ -23,20 +36,13 @@ pub(crate) enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::FrameError(e) => write!(f, "{e}"),
+            Self::OutOfMemory => write!(f, "out of memory"),
             Self::InvalidState => write!(f, "invalid state"),
         }
     }
 }
 
-impl From<frame::Error> for Error {
-    fn from(value: frame::Error) -> Self {
-        Self::FrameError(value)
-    }
-}
-
 /// A 4096-byte struct containing entries that map virtual adresses to physical addresses.
-#[derive(Debug)]
 #[repr(C, align(4096))]
 pub(crate) struct PageTable([TableEntry; 512]);
 
@@ -44,9 +50,9 @@ impl PageTable {
     /// Create a mapping between the given virtual address and physical address.
     pub(crate) fn map(
         &mut self,
-        frame_allocator: &FrameAllocator,
-        vaddr: VirtAddr,
-        paddr: PhysAddr,
+        frame_allocator: &Allocator,
+        vaddr: usize,
+        paddr: usize,
         flags: EntryFlags,
         level: usize,
     ) -> Result<(), Error> {
@@ -55,7 +61,7 @@ impl PageTable {
         assert!(flags.is_leaf());
 
         // Extract the virtual page numbers from the virtual address.
-        let vpns = vaddr.vpns();
+        let vpns = get_vpns(vaddr);
 
         // Assume the root page table is valid
         let mut entry = &mut self.0[vpns[2]];
@@ -64,13 +70,13 @@ impl PageTable {
                 // Allocate a 4096-byte page to contain to page table and mark the page entry as
                 // valid. Because every page is 4096-byte aligned, only the physical page number
                 // needs to be stored instead of the entire address.
-                let page = frame_allocator.zalloc(1)?;
-                *entry = TableEntry::new(page.addr().into(), EntryFlags::VALID);
+                let page = frame_allocator.zalloc(1).ok_or(Error::OutOfMemory)?;
+                *entry = TableEntry::new(page.addr(), EntryFlags::VALID);
             }
 
             // Go to the next entry.
-            let table = unsafe { entry.addr().as_ptr_mut::<PageTable>() };
-            entry = unsafe { &mut (*table).0[*vpn_next] };
+            let table_ptr = entry.addr() as *mut PageTable;
+            entry = unsafe { &mut (*table_ptr).0[*vpn_next] };
         }
 
         *entry = TableEntry::new(paddr, flags | EntryFlags::VALID);
@@ -78,7 +84,8 @@ impl PageTable {
     }
 
     /// Unmap the page table.
-    pub(crate) fn unmap(&mut self, frame_allocator: &FrameAllocator) -> Result<(), Error> {
+    #[allow(dead_code)]
+    pub(crate) fn unmap(&mut self, frame_allocator: &Allocator) -> Result<(), Error> {
         for entry_lvl2 in self.0.iter() {
             let entry_lvl2_flags = entry_lvl2.flags();
             if !entry_lvl2_flags.contains(EntryFlags::VALID) || entry_lvl2_flags.is_leaf() {
@@ -88,8 +95,8 @@ impl PageTable {
             // Get the page table.
             let table_lvl1_addr = entry_lvl2.addr();
             let table_lvl1 = {
-                let table = unsafe { table_lvl1_addr.as_ptr::<PageTable>() };
-                unsafe { table.as_ref().ok_or(Error::InvalidState)? }
+                let table_ptr = entry_lvl2.addr() as *const PageTable;
+                unsafe { table_ptr.as_ref().ok_or(Error::InvalidState)? }
             };
             // Since the number of levels is constant, we op for nesting loops instead of recursion
             // If we recursively call `unmap` again on inner tables, we would make extraneous
@@ -102,20 +109,24 @@ impl PageTable {
                 }
                 let table_lvl0_addr = entry_lvl1.addr();
                 unsafe {
-                    frame_allocator.dealloc(FrameId::try_from(table_lvl0_addr)?);
+                    frame_allocator.dealloc(
+                        FrameNumber::try_from(table_lvl0_addr).map_err(|_| Error::InvalidState)?,
+                    );
                 }
             }
             unsafe {
-                frame_allocator.dealloc(FrameId::try_from(table_lvl1_addr)?);
+                frame_allocator.dealloc(
+                    FrameNumber::try_from(table_lvl1_addr).map_err(|_| Error::InvalidState)?,
+                );
             }
         }
         Ok(())
     }
 
     /// Translate the given virtual address into its corresponding physical address.
-    pub(crate) fn virt2phys(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
+    pub(crate) fn virt2phys(&self, vaddr: usize) -> Option<usize> {
         // Extract the virtual page numbers from the virtual address.
-        let vpn_parts = vaddr.vpns();
+        let vpn_parts = get_vpns(vaddr);
 
         // Assume the root is valid
         let mut entry = &self.0[vpn_parts[2]];
@@ -138,9 +149,9 @@ impl PageTable {
                 return Some(entry.translate(vaddr, i));
             }
             // Go to the next entry.
-            let table = unsafe { entry.addr().as_ptr::<PageTable>() };
+            let table_ptr = entry.addr() as *const PageTable;
             let vpn_next = vpn_parts[i - 1];
-            entry = unsafe { &(*table).0[vpn_next] };
+            entry = unsafe { &(*table_ptr).0[vpn_next] };
         }
         None
     }
@@ -148,16 +159,16 @@ impl PageTable {
     /// Performs identity map (vaddr == paddr) for addresses in the range [start, end].
     pub(crate) fn id_map_range(
         &mut self,
-        frame_allocator: &FrameAllocator,
+        frame_allocator: &Allocator,
         start: usize,
         end: usize,
         flags: EntryFlags,
     ) -> Result<(), Error> {
-        let mut addr = start & !(FRAME_SIZE - 1);
-        let num_kb_pages = (align_value(end, FRAME_ORDER) - addr) / FRAME_SIZE;
+        let mut addr = start & !(PAGE_SIZE - 1);
+        let num_kb_pages = (align_value(end, PAGE_SIZE_BITS) - addr) / PAGE_SIZE;
         for _ in 0..num_kb_pages {
-            self.map(frame_allocator, addr.into(), addr.into(), flags, 0)?;
-            addr += FRAME_SIZE;
+            self.map(frame_allocator, addr, addr, flags, 0)?;
+            addr += PAGE_SIZE;
         }
         Ok(())
     }
@@ -207,24 +218,24 @@ impl EntryFlags {
 }
 
 /// Representation of an entry in the allocation page table.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(crate) struct TableEntry(usize);
 
 impl TableEntry {
-    fn new(addr: PhysAddr, flags: EntryFlags) -> Self {
-        let ppns = addr.ppns();
+    fn new(addr: usize, flags: EntryFlags) -> Self {
+        let ppns = get_ppns(addr);
         Self(ppns[2] << 28 | ppns[1] << 19 | ppns[0] << 10 | flags.bits() as usize)
     }
 
-    fn translate(&self, vaddr: VirtAddr, lvl: usize) -> PhysAddr {
+    fn translate(&self, vaddr: usize, lvl: usize) -> usize {
         let offset_mask = (1 << (12 + lvl * 9)) - 1;
-        let offset = vaddr.get() & offset_mask;
-        let ppns = self.addr().get() & !offset_mask;
-        PhysAddr::from(ppns | offset)
+        let offset = vaddr & offset_mask;
+        let ppns = self.addr() & !offset_mask;
+        ppns | offset
     }
 
-    fn addr(&self) -> PhysAddr {
-        PhysAddr::from((self.0 & !0x3ff) << 2)
+    fn addr(self) -> usize {
+        (self.0 & !0x3ff) << 2
     }
 
     fn flags(&self) -> EntryFlags {
