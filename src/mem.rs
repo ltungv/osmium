@@ -1,6 +1,9 @@
+pub(crate) mod addr;
 pub(crate) mod frame;
 pub(crate) mod heap;
 pub(crate) mod page;
+pub(crate) mod ppn;
+pub(crate) mod vpn;
 
 use core::alloc::{GlobalAlloc, Layout};
 
@@ -26,13 +29,13 @@ static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator;
 
 /// Initialize the global frame allocator.
 pub(crate) fn initialize_frame_allocator() {
-    FRAME_ALLOCATOR.call_once(|| unsafe { frame::Allocator::new(HEAP_SIZE, HEAP_START) });
+    FRAME_ALLOCATOR.call_once(|| unsafe { frame::Allocator::new(HEAP_START, HEAP_SIZE) });
 }
 
 /// Initialize the kernel heap allocator.
 pub(crate) fn initialize_kheap_allocator() {
     KHEAP_ALLOCATOR.call_once(|| {
-        let allocator =
+        let mut allocator =
             heap::Allocator::new(frame_allocator()).expect("initialized kernel heap allocator");
 
         allocator.identity_map().expect("mapped kernel memory");
@@ -51,28 +54,6 @@ pub(crate) fn kheap_allocator() -> SpinMutexGuard<'static, heap::Allocator> {
         .get()
         .expect("initialized kernel heap allocator")
         .lock()
-}
-
-#[derive(Clone, Copy)]
-struct PhysAddress(usize);
-
-impl PhysAddress {
-    fn ppns(addr: usize) -> [usize; 3] {
-        [
-            addr >> 12 & 0x1ff,
-            addr >> 21 & 0x1ff,
-            addr >> 30 & 0x3ff_ffff,
-        ]
-    }
-}
-
-#[derive(Clone, Copy)]
-struct VirtAddress(usize);
-
-impl VirtAddress {
-    fn vpns(addr: usize) -> [usize; 3] {
-        [addr >> 12 & 0x1ff, addr >> 21 & 0x1ff, addr >> 30 & 0x1ff]
-    }
 }
 
 // The global allocator is a static constant to a global allocator
