@@ -77,13 +77,13 @@ impl PageTable {
                 if !lvl1_pte_flags.contains(PteFlags::V) || lvl1_pte_flags.is_rwx() {
                     continue;
                 }
-                *lvl1_pte = PageTableEntry::new(lvl1_pte.ppn(), lvl1_pte_flags & !PteFlags::V);
                 let lvl0_ppn = lvl1_pte.ppn();
+                *lvl1_pte = PageTableEntry::default();
                 unsafe {
                     frame_allocator.dealloc(lvl0_ppn);
                 }
             }
-            *lvl2_pte = PageTableEntry::new(lvl2_pte.ppn(), lvl2_pte_flags & !PteFlags::V);
+            *lvl2_pte = PageTableEntry::default();
             unsafe {
                 frame_allocator.dealloc(lvl1_ppn);
             }
@@ -112,9 +112,13 @@ impl PageTable {
                 let paddr = PhysAddress::from(ppn) + vaddr.offset();
                 return Some(paddr);
             }
+            // At level 0, a valid non-leaf PTE means the table is malformed —
+            // there's no deeper level to descend into.
+            if lvl == 0 {
+                break;
+            }
             // Go to the next entry.
-            let index_next = indices[lvl - 1];
-            pte = &pte.ppn().as_slice::<PageTableEntry>()[index_next]
+            pte = &pte.ppn().as_slice::<PageTableEntry>()[indices[lvl - 1]];
         }
         None
     }
@@ -172,6 +176,12 @@ impl PteFlags {
 /// Representation of an entry in the allocation page table.
 #[derive(Clone, Copy)]
 pub(crate) struct PageTableEntry(usize);
+
+impl Default for PageTableEntry {
+    fn default() -> Self {
+        Self(0)
+    }
+}
 
 impl PageTableEntry {
     fn new(ppn: PhysPageNumber, flags: PteFlags) -> Self {
