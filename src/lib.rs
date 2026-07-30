@@ -21,7 +21,7 @@ use core::{arch::asm, ptr::NonNull};
 
 use alloc::vec::Vec;
 
-use crate::mem::{frame_allocator, kheap_allocator};
+use crate::mem::{addr::VirtAddress, frame_allocator, kheap_allocator};
 
 unsafe extern "C" {
     /// First memory address in the `.text` section.
@@ -73,48 +73,22 @@ extern "C" fn kinit() -> usize {
     mem::initialize_frame_allocator();
     mem::initialize_kheap_allocator();
 
-    #[cfg(debug_assertions)]
-    {
-        let (kmem_start, kmem_end) = kheap_allocator().mem_region();
-        unsafe {
-            use crate::{
-                BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
-                KERNEL_STACK_START, MEMORY_END, MEMORY_START, RODATA_END, RODATA_START, TEXT_END,
-                TEXT_START,
-            };
+    println!("{:?}", frame_allocator());
 
-            println!("HEAP_START = 0x{:x}", HEAP_START);
-            println!("HEAP_SIZE = {}", HEAP_SIZE);
-            println!("TEXT: 0x{:x} => 0x{:x}", TEXT_START, TEXT_END);
-            println!("DATA: 0x{:x} => 0x{:x}", DATA_START, DATA_END);
-            println!("RODATA: 0x{:x} => 0x{:x}", RODATA_START, RODATA_END);
-            println!("BSS: 0x{:x} => 0x{:x}", BSS_START, BSS_END);
-            println!(
-                "KERNEL_STACK: 0x{:x} => 0x{:x}",
-                KERNEL_STACK_START, KERNEL_STACK_END
-            );
-            println!("KERNEL_HEAP: 0x{:x} => 0x{:x}", kmem_start, kmem_end,);
-            println!("MEMORY: 0x{:x} => 0x{:x}", MEMORY_START, MEMORY_END);
-        }
-    }
-
-    let p = unsafe { HEAP_START };
-    let m = kheap_allocator().virt2phys(p).unwrap_or(0);
+    let p = unsafe { VirtAddress::from(HEAP_START) };
+    let m = kheap_allocator().translate(p).unwrap_or(0.into());
     println!("Walk {:?} = {:?}", p, m);
 
-    let p = uart::BASE_ADDRESS;
-    let m = kheap_allocator().virt2phys(p).unwrap_or(0);
+    let p = VirtAddress::from(uart::BASE_ADDRESS);
+    let m = kheap_allocator().translate(p).unwrap_or(0.into());
     println!("Walk {:?} = {:?}", p, m);
 
-    let root_frame_id = kheap_allocator().root_frame_id();
-    (root_frame_id.addr() >> 12) | (8 << 60)
+    kheap_allocator().satp()
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn kmain() {
     println!("hello, world!");
-    println!("{:?}", frame_allocator());
-
     {
         let v1: Vec<u8> = Vec::with_capacity(8);
         let v2: Vec<u8> = Vec::with_capacity(8);
@@ -282,11 +256,4 @@ fn abort() -> ! {
             asm!("wfi");
         }
     }
-}
-
-/// Align a value to some exponent of two.
-pub const fn align_value(val: usize, order: usize) -> usize {
-    assert!(order > 0);
-    let o = (1usize << order) - 1;
-    (val + o) & !o
 }
