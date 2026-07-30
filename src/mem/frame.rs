@@ -1,29 +1,28 @@
 //! Functions and types for managing physical frames.
 
-use core::{fmt, mem::size_of, ops, slice};
+use core::{fmt, mem::size_of, slice};
 
 use bitflags::bitflags;
 
-use crate::{
-    align_value,
-    mem::{PAGE_SIZE, PAGE_SIZE_BITS},
-};
+use crate::mem::{PAGE_SIZE, addr::PhysAddress, ppn::PhysPageNumber};
 
 /// An allocator for 4096-byte physical frames.
 pub(crate) struct Allocator {
+    base_ppn: PhysPageNumber,
     descriptors: spin::Mutex<&'static mut [FrameDescriptor]>,
-    alloc_start: FrameNumber,
 }
 
 impl fmt::Debug for Allocator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let descriptors = self.descriptors.lock();
-        let desc_begin = descriptors.as_ptr() as usize;
-        let desc_end = desc_begin + size_of::<FrameDescriptor>() * descriptors.len();
+
+        let desc_total_size = descriptors.len() * size_of::<FrameDescriptor>();
+        let desc_begin = PhysAddress::from(descriptors.as_ptr() as usize);
+        let desc_end = desc_begin + desc_total_size;
 
         let alloc_total_size = descriptors.len() * PAGE_SIZE;
-        let alloc_begin = self.alloc_start;
-        let alloc_end = alloc_begin + descriptors.len();
+        let alloc_begin = PhysAddress::from(self.base_ppn);
+        let alloc_end = alloc_begin + alloc_total_size;
 
         writeln!(f, "------------------------------------")?;
         writeln!(
@@ -32,13 +31,8 @@ impl fmt::Debug for Allocator {
             descriptors.len(),
             alloc_total_size,
         )?;
-        writeln!(f, "desc: 0x{:x} -> 0x{:x}", desc_begin, desc_end)?;
-        writeln!(
-            f,
-            "phys: 0x{:x} -> 0x{:x}",
-            alloc_begin.addr(),
-            alloc_end.addr()
-        )?;
+        writeln!(f, "desc: {:?} -> {:?}", desc_begin, desc_end)?;
+        writeln!(f, "phys: {:?} -> {:?}", alloc_begin, alloc_end)?;
         writeln!(f, "------------------------------------")?;
         let mut current_pages_begin = None;
         let mut count_taken = 0;
@@ -52,14 +46,14 @@ impl fmt::Debug for Allocator {
             let is_last = descriptor.has(FrameDescriptorFlags::LAST);
             if is_last {
                 current_pages_begin.take();
-                let alloc_begin = self.alloc_start + pages_begin;
-                let alloc_end = self.alloc_start + page_end;
+                let alloc_begin = self.base_ppn + pages_begin;
+                let alloc_end = self.base_ppn + page_end;
                 writeln!(
                     f,
-                    "[{:>4}] 0x{:x} -> 0x{:x}: {:>3} page(s)",
+                    "[{:>4}] {:?} -> {:?}: {:>3} page(s)",
                     pages_begin,
-                    alloc_begin.addr(),
-                    alloc_end.addr(),
+                    alloc_begin,
+                    alloc_end,
                     page_end - pages_begin + 1
                 )?;
             }
@@ -94,11 +88,7 @@ impl Allocator {
     /// is physically available for this allocator to manage.
     pub(crate) unsafe fn new(heap_start: usize, heap_size: usize) -> Self {
         let pages = heap_size / (size_of::<FrameDescriptor>() + PAGE_SIZE);
-        let alloc_start = FrameNumber::try_from(align_value(
-            heap_start + size_of::<FrameDescriptor>() * pages,
-            PAGE_SIZE_BITS,
-        ))
-        .expect("start of allocation address is aligned");
+        let base_ppn = PhysAddress::from(heap_start + size_of::<FrameDescriptor>() * pages).ceil();
 
         let descriptors =
             unsafe { slice::from_raw_parts_mut(heap_start as *mut FrameDescriptor, pages) };
@@ -108,29 +98,28 @@ impl Allocator {
         }
 
         Self {
-            alloc_start,
+            base_ppn,
             descriptors: spin::Mutex::new(descriptors),
         }
     }
 
     /// Allocates a contiguous region of `pages` and returns the address at the start of the region.
     /// If there's not enough memory, returns `None`.
-    pub(crate) fn alloc(&self, pages: usize) -> Option<FrameNumber> {
+    pub(crate) fn alloc(&self, pages: usize) -> Option<PhysPageNumber> {
         let mut descriptors = self.descriptors.lock();
         let offset = Self::find_free_pages(&descriptors, pages)?;
         descriptors[offset + pages - 1].set(FrameDescriptorFlags::LAST);
         for i in offset..offset + pages {
             descriptors[i].set(FrameDescriptorFlags::TAKEN);
         }
-        Some(self.alloc_start + offset)
+        Some(self.base_ppn + offset)
     }
 
     /// Allocates a contiguous region of `pages`, initializes the region to 0, and returns the address
     /// at the start of the region. If there's not enough memory, returns `None`.
-    pub(crate) fn zalloc(&self, pages: usize) -> Option<FrameNumber> {
-        self.alloc(pages).inspect(|id| unsafe {
-            core::ptr::write_bytes(id.addr() as *mut u8, 0, PAGE_SIZE * pages);
-        })
+    pub(crate) fn zalloc(&self, pages: usize) -> Option<PhysPageNumber> {
+        self.alloc(pages)
+            .inspect(|frame| frame.as_slice_mut::<u8>().fill(0))
     }
 
     /// Deallocate a contiguous region starting at `ptr`.
@@ -139,9 +128,9 @@ impl Allocator {
     ///
     /// Caller must make sure this function is only called with the starting address of a contiguous
     /// page region that was previously allocated by this frame allocator.
-    pub(crate) unsafe fn dealloc(&self, id: FrameNumber) {
-        assert!(id >= self.alloc_start);
-        let mut offset = id.0 - self.alloc_start.0;
+    pub(crate) unsafe fn dealloc(&self, ppn: PhysPageNumber) {
+        assert!(ppn >= self.base_ppn);
+        let mut offset = usize::from(ppn) - usize::from(self.base_ppn);
         let mut descriptors = self.descriptors.lock();
         while descriptors[offset].has(FrameDescriptorFlags::TAKEN)
             && !descriptors[offset].has(FrameDescriptorFlags::LAST)
@@ -200,45 +189,5 @@ impl FrameDescriptor {
     /// Clear all previously set flags.
     fn clear(&mut self) {
         self.0 = 0;
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct UnalignedFrameAddressError;
-
-impl fmt::Display for UnalignedFrameAddressError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "frame address must be aligned to {PAGE_SIZE}")
-    }
-}
-
-/// A frame's start address shifted right by `PAGE_SIZE_BITS`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct FrameNumber(usize);
-
-impl ops::Add<usize> for FrameNumber {
-    type Output = Self;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        Self(self.0 + rhs)
-    }
-}
-
-impl TryFrom<usize> for FrameNumber {
-    type Error = UnalignedFrameAddressError;
-
-    fn try_from(addr: usize) -> Result<Self, Self::Error> {
-        let mask = (1 << PAGE_SIZE_BITS) - 1;
-        if addr & mask != 0 {
-            return Err(UnalignedFrameAddressError);
-        }
-        Ok(Self(addr >> PAGE_SIZE_BITS))
-    }
-}
-
-impl FrameNumber {
-    // /// Returns the address to the start of frame.
-    pub(crate) fn addr(self) -> usize {
-        self.0 << PAGE_SIZE_BITS
     }
 }
