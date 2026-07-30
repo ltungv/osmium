@@ -129,7 +129,7 @@ impl UartDriver {
 
     /// Initialize the UART hardware registers.
     fn initialize(&mut self) {
-        // We'll later restore lcr to this value after setting the divisor.
+        // Data word length: 8 bits.
         let lcr_value = 1 << 1 | 1 << 0;
 
         // Set the divisor from a global clock rate of 22.729 mhz (22,729,000 cycles per second)
@@ -144,22 +144,30 @@ impl UartDriver {
         let divisor_ls = divisor & 0xff;
         let divisor_ms = divisor >> 8;
 
-        // Enable fifo, clear tx/rx queues, and set interrupt watermark at 14 bytes.
-        self.wr_reg(Self::FCR, 1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
-        // Set data word length to 8 bits.
-        self.wr_reg(Self::LCR, lcr_value);
-        // Enable receiver buffer interrupts.
-        self.wr_reg(Self::IER, 1 << 0);
-        // Enable dlab.
+        // Disable all interrupts during initialization.
+        self.wr_reg(Self::IER, 0);
+
+        // Enable DLAB to access the divisor latches (offsets 0 and 1 become DLL/DLM).
         self.wr_reg(Self::LCR, lcr_value | 1 << 7);
-        // Set divisor least significant bits.
+
+        // Set divisor least significant byte.
         self.wr_reg(Self::DLL, divisor_ls as u8);
-        // Set divisor most significant bits.
+
+        // Set divisor most significant byte.
         self.wr_reg(Self::DLM, divisor_ms as u8);
-        // Disable dlab.
+
+        // Disable DLAB and set data word length to 8 bits.
         self.wr_reg(Self::LCR, lcr_value);
+
+        // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
+        self.wr_reg(Self::FCR, 1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
+
         // Mark data terminal ready, and signal request to send.
         self.wr_reg(Self::MCR, 1 << 1 | 1 << 0);
+
+        // Enable receiver buffer interrupts (must be after DLAB is disabled,
+        // since offset 1 is shared between IER and DLM).
+        self.wr_reg(Self::IER, 1 << 0);
     }
 }
 
