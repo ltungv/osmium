@@ -4,11 +4,13 @@ use core::fmt;
 
 use bitflags::bitflags;
 
-use crate::mem::{
-    addr::{PhysAddress, VirtAddress},
-    frame,
-    ppn::{PhysPageNumber, PpnRange},
-    vpn::VirtPageNumber,
+use crate::{
+    addr::{PhysAddr, VirtAddr},
+    mem::{
+        frame, page,
+        ppn::{PhysPageNumber, PpnRange},
+        vpn::VirtPageNumber,
+    },
 };
 
 /// Errors occurs when working with the page table.
@@ -26,24 +28,20 @@ impl fmt::Display for Error {
     }
 }
 
-pub(crate) struct PageTable {
-    root_ppn: PhysPageNumber,
+#[repr(C, align(4096))]
+pub(crate) struct PageTable([PageTableEntry; 4096]);
+
+impl Default for PageTable {
+    fn default() -> Self {
+        Self([PageTableEntry::default(); 4096])
+    }
 }
 
 impl PageTable {
-    pub(crate) fn new(frame_allocator: &frame::Allocator) -> Option<Self> {
-        let root_ppn = frame_allocator.zalloc(1)?;
-        Some(Self { root_ppn })
-    }
-
-    pub(crate) fn satp(&self) -> usize {
-        8 << 60 | usize::from(self.root_ppn)
-    }
-
     /// Create a mapping between the given virtual address and physical address.
     pub(crate) fn map(
         &mut self,
-        frame_allocator: &frame::Allocator,
+        frame_allocator: &mut frame::Allocator,
         vpn: VirtPageNumber,
         ppn: PhysPageNumber,
         flags: PteFlags,
@@ -51,7 +49,7 @@ impl PageTable {
     ) -> Result<(), Error> {
         assert!(flags.is_rwx());
         let indices = vpn.indices();
-        let mut pte = &mut self.root_ppn.as_slice_mut::<PageTableEntry>()[indices[2]];
+        let mut pte = &mut self.0[indices[2]];
         for &index_next in indices[lvl..2].iter().rev() {
             if !pte.flags().contains(PteFlags::V) {
                 let inner_ppn = frame_allocator.zalloc(1).ok_or(Error::OutOfMemory)?;
@@ -65,8 +63,8 @@ impl PageTable {
 
     /// Unmap the page table.
     #[allow(dead_code)]
-    pub(crate) fn unmap(&mut self, frame_allocator: &frame::Allocator) -> Result<(), Error> {
-        for lvl2_pte in self.root_ppn.as_slice_mut::<PageTableEntry>() {
+    pub(crate) fn unmap(&mut self, frame_allocator: &mut frame::Allocator) -> Result<(), Error> {
+        for lvl2_pte in &mut self.0 {
             let lvl2_pte_flags = lvl2_pte.flags();
             if !lvl2_pte_flags.contains(PteFlags::V) || lvl2_pte_flags.is_rwx() {
                 continue;
@@ -92,10 +90,10 @@ impl PageTable {
     }
 
     /// Translate the given virtual address into its corresponding physical address.
-    pub(crate) fn translate(&self, vaddr: VirtAddress) -> Option<PhysAddress> {
+    pub(crate) fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         let vpn = VirtPageNumber::from(vaddr);
         let indices = vpn.indices();
-        let mut pte = &self.root_ppn.as_slice::<PageTableEntry>()[indices[2]];
+        let mut pte = &self.0[indices[2]];
         for lvl in (0..3).rev() {
             let flags = pte.flags();
             if !flags.contains(PteFlags::V) {
@@ -109,7 +107,7 @@ impl PageTable {
                 // is copied to PPN[1], VPN[0] is copied to PPN[0], and the page offset is copied,
                 // as normal.
                 let ppn = pte.translate(vpn, lvl);
-                let paddr = PhysAddress::from(ppn) + vaddr.offset();
+                let paddr = PhysAddr::from(ppn) + vaddr.offset();
                 return Some(paddr);
             }
             // At level 0, a valid non-leaf PTE means the table is malformed —
@@ -126,12 +124,12 @@ impl PageTable {
     /// Performs identity map (vaddr == paddr) for addresses in the range [start, end].
     pub(crate) fn id_map_range(
         &mut self,
-        frame_allocator: &frame::Allocator,
-        start: PhysAddress,
-        end: PhysAddress,
+        frame_allocator: &mut frame::Allocator,
+        start: PhysAddr,
+        end: PhysAddr,
         flags: PteFlags,
     ) -> Result<(), Error> {
-        let range = PpnRange::new(start.floor(), end.ceil());
+        let range = PpnRange::new(start.floor(), end.ceil()).unwrap();
         for ppn in range.into_iter() {
             self.map(
                 frame_allocator,
@@ -174,14 +172,8 @@ impl PteFlags {
 }
 
 /// Representation of an entry in the allocation page table.
-#[derive(Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct PageTableEntry(usize);
-
-impl Default for PageTableEntry {
-    fn default() -> Self {
-        Self(0)
-    }
-}
 
 impl PageTableEntry {
     fn new(ppn: PhysPageNumber, flags: PteFlags) -> Self {
@@ -201,5 +193,38 @@ impl PageTableEntry {
 
     fn flags(&self) -> PteFlags {
         PteFlags::from_bits_retain(self.0 & 0xff)
+    }
+}
+
+pub struct Mapper<'a> {
+    lvl2_page_table: &'a mut PageTable,
+}
+
+impl<'a> Mapper<'a> {
+    pub(crate) fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
+        todo!()
+    }
+
+    pub(crate) fn map(
+        &mut self,
+        vpn: VirtPageNumber,
+        ppn: PhysPageNumber,
+        flags: PteFlags,
+        allocator: &frame::Allocator,
+    ) -> Result<(), page::Error> {
+        todo!()
+    }
+
+    pub(crate) fn map_identity(
+        &mut self,
+        addr: usize,
+        flags: PteFlags,
+        allocator: &frame::Allocator,
+    ) -> Result<(), page::Error> {
+        todo!()
+    }
+
+    pub(crate) fn unmap(&mut self) -> Result<(), page::Error> {
+        todo!()
     }
 }

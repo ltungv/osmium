@@ -4,6 +4,11 @@
 #![no_std]
 #![warn(
     clippy::all,
+    clippy::cargo,
+    clippy::missing_safety_doc,
+    clippy::nursery,
+    clippy::pedantic,
+    missing_debug_implementations,
     missing_docs,
     rust_2018_idioms,
     rust_2021_compatibility,
@@ -12,16 +17,21 @@
     unreachable_pub
 )]
 
-extern crate alloc;
-
+mod addr;
 mod mem;
 mod uart;
 
-use core::{arch::asm, ptr::NonNull};
+use core::arch::asm;
 
-use alloc::vec::Vec;
+use mem::frame_allocator;
 
-use crate::mem::{addr::VirtAddress, frame_allocator, kheap_allocator};
+use crate::mem::ppn::PhysPageNumber;
+
+/// The size of a page in bytes.
+pub const PAGE_SIZE: usize = 1 << PAGE_ORDER;
+
+/// The number of bits needed to represent the page size.
+pub const PAGE_ORDER: usize = 12;
 
 unsafe extern "C" {
     /// First memory address in the `.text` section.
@@ -67,59 +77,72 @@ unsafe extern "C" {
     pub static MEMORY_END: usize;
 }
 
+const NPAGES: usize = 16;
+
 #[unsafe(no_mangle)]
 extern "C" fn kinit() -> usize {
     uart::initialize();
     mem::initialize_frame_allocator();
-    mem::initialize_kheap_allocator();
+    // mem::initialize_kheap_allocator();
+    println!("{:?}\n", frame_allocator());
 
-    println!("{:?}", frame_allocator());
+    let mut pages: [Option<PhysPageNumber>; NPAGES] = [None; NPAGES];
+    for page in &mut pages {
+        *page = frame_allocator().alloc(0);
+        // println!("{:?}\n", frame_allocator());
+    }
 
-    let p = unsafe { VirtAddress::from(HEAP_START) };
-    let m = kheap_allocator().translate(p).unwrap_or(0.into());
-    println!("Walk {:?} = {:?}", p, m);
+    println!("---------------------------------------------\n");
+    for &ppn in pages.iter().flatten() {
+        frame_allocator().dealloc(ppn);
+        // println!("{:?}\n", frame_allocator());
+    }
 
-    let p = VirtAddress::from(uart::BASE_ADDRESS);
-    let m = kheap_allocator().translate(p).unwrap_or(0.into());
-    println!("Walk {:?} = {:?}", p, m);
+    // let p = unsafe { VirtAddress::from(HEAP_START) };
+    // let m = kheap_allocator().translate(p).unwrap_or(0.into());
+    // println!("Walk {:?} = {:?}", p, m);
 
-    kheap_allocator().satp()
+    // let p = VirtAddress::from(uart::BASE_ADDRESS);
+    // let m = kheap_allocator().translate(p).unwrap_or(0.into());
+    // println!("Walk {:?} = {:?}", p, m);
+
+    // kheap_allocator().satp()
+    todo!("implement the page mapper and compose the satp value from the root table page number")
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn kmain() {
-    println!("hello, world!");
-    {
-        let v1: Vec<u8> = Vec::with_capacity(8);
-        let v2: Vec<u8> = Vec::with_capacity(8);
-        let v3: Vec<u8> = Vec::with_capacity(8);
-        println!("{:?}", kheap_allocator());
+    // println!("hello, world!");
+    // {
+    //     let v1: Vec<u8> = Vec::with_capacity(8);
+    //     let v2: Vec<u8> = Vec::with_capacity(8);
+    //     let v3: Vec<u8> = Vec::with_capacity(8);
+    //     println!("{:?}", kheap_allocator());
 
-        drop(v2);
-        println!("{:?}", kheap_allocator());
+    //     drop(v2);
+    //     println!("{:?}", kheap_allocator());
 
-        let v4: Vec<u8> = Vec::with_capacity(64);
-        println!("{:?}", kheap_allocator());
+    //     let v4: Vec<u8> = Vec::with_capacity(64);
+    //     println!("{:?}", kheap_allocator());
 
-        drop(v1);
-        drop(v3);
-        drop(v4);
-    }
+    //     drop(v1);
+    //     drop(v3);
+    //     drop(v4);
+    // }
 
-    println!("triggering faults...");
-    unsafe {
-        // Set the next machine timer to fire.
-        let mtimecmp = 0x0200_4000 as *mut u64;
-        let mtime = 0x0200_bff8 as *const u64;
-        // The frequency given by QEMU is 10_000_000 Hz, so this sets
-        // the next interrupt to fire one second from now.
-        mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
+    // println!("triggering faults...");
+    // unsafe {
+    //     // Set the next machine timer to fire.
+    //     let mtimecmp = 0x0200_4000 as *mut u64;
+    //     let mtime = 0x0200_bff8 as *const u64;
+    //     // The frequency given by QEMU is 10_000_000 Hz, so this sets
+    //     // the next interrupt to fire one second from now.
+    //     mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
 
-        // Let's cause a page fault and see what happens. This should trap
-        // to m_trap under trap.rs
-        let v = NonNull::dangling();
-        v.write_volatile(0);
-    }
+    //     // Let's cause a page fault and see what happens. This should trap
+    //     // to m_trap under trap.rs
+    //     let v = NonNull::dangling();
+    //     v.write_volatile(0);
 }
 
 #[derive(Clone, Copy)]

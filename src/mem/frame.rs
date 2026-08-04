@@ -4,31 +4,29 @@ use core::{fmt, mem::size_of, slice};
 
 use bitflags::bitflags;
 
-use crate::mem::{PAGE_SIZE, addr::PhysAddress, ppn::PhysPageNumber};
+use crate::{PAGE_SIZE, addr::PhysAddr, mem::ppn::PhysPageNumber};
 
 /// An allocator for 4096-byte physical frames.
 pub(crate) struct Allocator {
     base_ppn: PhysPageNumber,
-    descriptors: spin::Mutex<&'static mut [FrameDescriptor]>,
+    descriptors: &'static mut [FrameDescriptor],
 }
 
 impl fmt::Debug for Allocator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let descriptors = self.descriptors.lock();
-
-        let desc_total_size = descriptors.len() * size_of::<FrameDescriptor>();
-        let desc_begin = PhysAddress::from(descriptors.as_ptr() as usize);
+        let desc_total_size = self.descriptors.len() * size_of::<FrameDescriptor>();
+        let desc_begin = PhysAddr::from(self.descriptors.as_ptr() as usize);
         let desc_end = desc_begin + desc_total_size;
 
-        let alloc_total_size = descriptors.len() * PAGE_SIZE;
-        let alloc_begin = PhysAddress::from(self.base_ppn);
-        let alloc_end = alloc_begin + alloc_total_size;
+        let alloc_begin = self.base_ppn;
+        let alloc_end = alloc_begin + PAGE_SIZE;
+        let alloc_total_size = self.descriptors.len() * PAGE_SIZE;
 
         writeln!(f, "------------------------------------")?;
         writeln!(
             f,
             "PageAllocator [pages={} size={}]",
-            descriptors.len(),
+            self.descriptors.len(),
             alloc_total_size,
         )?;
         writeln!(f, "desc: {:?} -> {:?}", desc_begin, desc_end)?;
@@ -36,7 +34,7 @@ impl fmt::Debug for Allocator {
         writeln!(f, "------------------------------------")?;
         let mut current_pages_begin = None;
         let mut count_taken = 0;
-        for (page_end, descriptor) in descriptors.iter().enumerate() {
+        for (page_end, descriptor) in self.descriptors.iter().enumerate() {
             let is_taken = descriptor.has(FrameDescriptorFlags::TAKEN);
             if !is_taken {
                 continue;
@@ -58,7 +56,7 @@ impl fmt::Debug for Allocator {
                 )?;
             }
         }
-        let count_free = descriptors.len() - count_taken;
+        let count_free = self.descriptors.len() - count_taken;
         if count_taken != 0 {
             writeln!(f, "------------------------------------")?;
         }
@@ -80,44 +78,43 @@ impl fmt::Debug for Allocator {
 }
 
 impl Allocator {
-    /// Creates a new frame allocator given the heap's start address and size.
-    ///
-    /// # Safety
-    ///
-    /// Caller must guarantee that the memory region from `heap_start` to `heap_start + heap_size`
-    /// is physically available for this allocator to manage.
-    pub(crate) unsafe fn new(heap_start: usize, heap_size: usize) -> Self {
-        let pages = heap_size / (size_of::<FrameDescriptor>() + PAGE_SIZE);
-        let base_ppn = PhysAddress::from(heap_start + size_of::<FrameDescriptor>() * pages).ceil();
-
-        let descriptors =
-            unsafe { slice::from_raw_parts_mut(heap_start as *mut FrameDescriptor, pages) };
-
-        for descriptor in descriptors.iter_mut() {
-            descriptor.clear();
-        }
-
-        Self {
-            base_ppn,
-            descriptors: spin::Mutex::new(descriptors),
-        }
-    }
+    // /// Creates a new frame allocator given the physical start address and size.
+    // ///
+    // /// # Safety
+    // ///
+    // /// Caller must guarantee that the memory region from `base` to `base + size`
+    // /// is physically available for this allocator to manage.
+    // pub(crate) unsafe fn new(base: PhysAddr, size: usize) -> Self {
+    //     let capacity = size / (size_of::<FrameDescriptor>() + PAGE_SIZE);
+    //     let descriptors = unsafe {
+    //         slice::from_raw_parts_mut(base.as_ptr_mut().cast::<FrameDescriptor>(), capacity)
+    //     };
+    //     for descriptor in descriptors.iter_mut() {
+    //         descriptor.clear();
+    //     }
+    //     let base_ppn = (base + size_of::<FrameDescriptor>() * descriptors.len()).ceil();
+    //     Self {
+    //         base_ppn,
+    //         descriptors,
+    //     }
+    // }
 
     /// Allocates a contiguous region of `pages` and returns the address at the start of the region.
     /// If there's not enough memory, returns `None`.
-    pub(crate) fn alloc(&self, pages: usize) -> Option<PhysPageNumber> {
-        let mut descriptors = self.descriptors.lock();
-        let offset = Self::find_free_pages(&descriptors, pages)?;
-        descriptors[offset + pages - 1].set(FrameDescriptorFlags::LAST);
-        for i in offset..offset + pages {
-            descriptors[i].set(FrameDescriptorFlags::TAKEN);
-        }
+    pub(crate) fn alloc(&mut self, pages: usize) -> Option<PhysPageNumber> {
+        let offset = Self::find_free_pages(&self.descriptors, pages)?;
+
+        self.descriptors[offset + pages - 1].set(FrameDescriptorFlags::LAST);
+        self.descriptors[offset..offset + pages]
+            .iter_mut()
+            .for_each(|d| d.set(FrameDescriptorFlags::TAKEN));
+
         Some(self.base_ppn + offset)
     }
 
     /// Allocates a contiguous region of `pages`, initializes the region to 0, and returns the address
     /// at the start of the region. If there's not enough memory, returns `None`.
-    pub(crate) fn zalloc(&self, pages: usize) -> Option<PhysPageNumber> {
+    pub(crate) fn zalloc(&mut self, pages: usize) -> Option<PhysPageNumber> {
         self.alloc(pages)
             .inspect(|frame| frame.as_slice_mut::<u8>().fill(0))
     }
@@ -128,21 +125,20 @@ impl Allocator {
     ///
     /// Caller must make sure this function is only called with the starting address of a contiguous
     /// page region that was previously allocated by this frame allocator.
-    pub(crate) unsafe fn dealloc(&self, ppn: PhysPageNumber) {
+    pub(crate) unsafe fn dealloc(&mut self, ppn: PhysPageNumber) {
         assert!(ppn >= self.base_ppn);
         let mut offset = usize::from(ppn) - usize::from(self.base_ppn);
-        let mut descriptors = self.descriptors.lock();
-        while descriptors[offset].has(FrameDescriptorFlags::TAKEN)
-            && !descriptors[offset].has(FrameDescriptorFlags::LAST)
+        while self.descriptors[offset].has(FrameDescriptorFlags::TAKEN)
+            && !self.descriptors[offset].has(FrameDescriptorFlags::LAST)
         {
-            descriptors[offset].clear();
+            self.descriptors[offset].clear();
             offset += 1;
         }
         assert!(
-            descriptors[offset].has(FrameDescriptorFlags::LAST),
+            self.descriptors[offset].has(FrameDescriptorFlags::LAST),
             "possible double-free detected! (not taken found before last)"
         );
-        descriptors[offset].clear();
+        self.descriptors[offset].clear();
     }
 
     /// Find a first address of a contiguous region of one or more free pages.
@@ -176,9 +172,9 @@ bitflags! {
 struct FrameDescriptor(u8);
 
 impl FrameDescriptor {
-    /// Enable the bit corresponding to the given page type.
-    fn set(&mut self, flags: FrameDescriptorFlags) {
-        self.0 |= flags.bits();
+    /// Clear all previously set flags.
+    fn clear(&mut self) {
+        self.0 = 0;
     }
 
     /// Return true of the given flag is set.
@@ -186,8 +182,8 @@ impl FrameDescriptor {
         self.0 & flags.bits() == flags.bits()
     }
 
-    /// Clear all previously set flags.
-    fn clear(&mut self) {
-        self.0 = 0;
+    /// Enable the bit corresponding to the given page type.
+    fn set(&mut self, flags: FrameDescriptorFlags) {
+        self.0 |= flags.bits();
     }
 }

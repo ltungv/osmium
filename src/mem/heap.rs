@@ -2,17 +2,7 @@
 
 use core::{fmt, marker::PhantomData, mem::size_of, ptr::NonNull};
 
-use crate::{
-    BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
-    KERNEL_STACK_START, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
-    mem::{
-        PAGE_SIZE,
-        addr::{PhysAddress, VirtAddress},
-        frame, frame_allocator,
-        page::{self, PageTable, PteFlags},
-    },
-    uart,
-};
+use crate::{PAGE_SIZE, addr::PhysAddr, mem::frame};
 
 /// Number of pages used for the kernel heap allocator.
 pub(crate) const PAGE_COUNT: usize = 64;
@@ -20,7 +10,6 @@ pub(crate) const PAGE_COUNT: usize = 64;
 /// Metadata for the kernel's memory.
 pub(crate) struct Allocator {
     alloc_list: AllocationList,
-    root_table: PageTable,
 }
 
 impl fmt::Debug for Allocator {
@@ -31,7 +20,7 @@ impl fmt::Debug for Allocator {
 
 impl Allocator {
     /// Initialize the kernel's memory.
-    pub(crate) fn new(frame_allocator: &frame::Allocator) -> Option<Self> {
+    pub(crate) fn new(frame_allocator: &mut frame::Allocator) -> Option<Self> {
         let head_ppn = frame_allocator.zalloc(PAGE_COUNT)?;
         let tail_ppn = head_ppn + PAGE_COUNT;
 
@@ -39,10 +28,9 @@ impl Allocator {
         // region of `PAGE_COUNT` frames. Writing an `AllocationNode` at this
         // address is valid because the region is large enough and the address
         // is 4096-byte aligned (satisfies `AllocationNode`'s `usize` alignment).
-        let mut head = unsafe {
-            NodePtr::from_raw(PhysAddress::from(head_ppn).as_ptr_mut().cast::<AllocNode>())
-        };
-        let tail = PhysAddress::from(tail_ppn).as_ptr().cast::<u8>();
+        let mut head =
+            unsafe { NodePtr::from_raw(PhysAddr::from(head_ppn).as_ptr_mut::<AllocNode>()) };
+        let tail = unsafe { PhysAddr::from(tail_ppn).as_ptr::<u8>() };
 
         {
             let node = head.as_mut();
@@ -52,18 +40,13 @@ impl Allocator {
         }
 
         let alloc_list = AllocationList { head, tail };
-        let root_table = PageTable::new(frame_allocator)?;
-
-        Some(Self {
-            alloc_list,
-            root_table,
-        })
+        Some(Self { alloc_list })
     }
 
-    /// Returns the identification of the root frame of the kernel.
-    pub(crate) fn satp(&self) -> usize {
-        self.root_table.satp()
-    }
+    // /// Returns the identification of the root frame of the kernel.
+    // pub(crate) fn satp(&self) -> usize {
+    //     8 << 60 | usize::from(self.root_ppn)
+    // }
 
     /// Allocate `size` bytes (8-byte aligned).
     pub(crate) fn alloc(&mut self, size: usize) -> Option<*mut u8> {
@@ -123,10 +106,10 @@ impl Allocator {
         self.coalesce();
     }
 
-    /// Translates a virtual memory address into a physical one.
-    pub(crate) fn translate(&self, vaddr: VirtAddress) -> Option<PhysAddress> {
-        self.root_table.translate(vaddr)
-    }
+    // /// Translates a virtual memory address into a physical one.
+    // pub(crate) fn translate(&self, vaddr: VirtAddress) -> Option<PhysAddress> {
+    //     self.root_table.translate(vaddr)
+    // }
 
     /// Merge adjacent free chunks into a bigger chunk.
     pub(crate) fn coalesce(&mut self) {
@@ -155,70 +138,70 @@ impl Allocator {
         }
     }
 
-    /// Identity map all sections of the kernel's memory.
-    pub(crate) fn identity_map(&mut self) -> Result<(), page::Error> {
-        self.root_table.map(
-            frame_allocator(),
-            VirtAddress::from(uart::BASE_ADDRESS).into(),
-            PhysAddress::from(uart::BASE_ADDRESS).into(),
-            PteFlags::R | PteFlags::W,
-            0,
-        )?;
+    // /// Identity map all sections of the kernel's memory.
+    // pub(crate) fn identity_map(&mut self) -> Result<(), page::Error> {
+    //     self.root_table.map(
+    //         frame_allocator(),
+    //         VirtAddress::from(uart::BASE_ADDRESS).into(),
+    //         PhysAddress::from(uart::BASE_ADDRESS).into(),
+    //         PteFlags::R | PteFlags::W,
+    //         0,
+    //     )?;
 
-        self.root_table.id_map_range(
-            frame_allocator(),
-            self.alloc_list.head_addr(),
-            self.alloc_list.tail_addr(),
-            PteFlags::R | PteFlags::W,
-        )?;
+    //     self.root_table.id_map_range(
+    //         frame_allocator(),
+    //         self.alloc_list.head_addr(),
+    //         self.alloc_list.tail_addr(),
+    //         PteFlags::R | PteFlags::W,
+    //     )?;
 
-        // SAFETY: the linker-script symbols below are valid addresses
-        // provided by the linker and represent the kernel's memory layout.
-        unsafe {
-            self.root_table.id_map_range(
-                frame_allocator(),
-                PhysAddress::from(HEAP_START),
-                PhysAddress::from(HEAP_START) + HEAP_SIZE,
-                PteFlags::R | PteFlags::W,
-            )?;
+    //     // SAFETY: the linker-script symbols below are valid addresses
+    //     // provided by the linker and represent the kernel's memory layout.
+    //     unsafe {
+    //         self.root_table.id_map_range(
+    //             frame_allocator(),
+    //             PhysAddress::from(HEAP_START),
+    //             PhysAddress::from(HEAP_START) + HEAP_SIZE,
+    //             PteFlags::R | PteFlags::W,
+    //         )?;
 
-            self.root_table.id_map_range(
-                frame_allocator(),
-                PhysAddress::from(TEXT_START),
-                PhysAddress::from(TEXT_END),
-                PteFlags::R | PteFlags::X,
-            )?;
+    //         self.root_table.id_map_range(
+    //             frame_allocator(),
+    //             PhysAddress::from(TEXT_START),
+    //             PhysAddress::from(TEXT_END),
+    //             PteFlags::R | PteFlags::X,
+    //         )?;
 
-            self.root_table.id_map_range(
-                frame_allocator(),
-                PhysAddress::from(RODATA_START),
-                PhysAddress::from(RODATA_END),
-                PteFlags::R | PteFlags::X,
-            )?;
+    //         self.root_table.id_map_range(
+    //             frame_allocator(),
+    //             PhysAddress::from(RODATA_START),
+    //             PhysAddress::from(RODATA_END),
+    //             PteFlags::R | PteFlags::X,
+    //         )?;
 
-            self.root_table.id_map_range(
-                frame_allocator(),
-                PhysAddress::from(DATA_START),
-                PhysAddress::from(DATA_END),
-                PteFlags::R | PteFlags::W,
-            )?;
+    //         self.root_table.id_map_range(
+    //             frame_allocator(),
+    //             PhysAddress::from(DATA_START),
+    //             PhysAddress::from(DATA_END),
+    //             PteFlags::R | PteFlags::W,
+    //         )?;
 
-            self.root_table.id_map_range(
-                frame_allocator(),
-                PhysAddress::from(BSS_START),
-                PhysAddress::from(BSS_END),
-                PteFlags::R | PteFlags::W,
-            )?;
+    //         self.root_table.id_map_range(
+    //             frame_allocator(),
+    //             PhysAddress::from(BSS_START),
+    //             PhysAddress::from(BSS_END),
+    //             PteFlags::R | PteFlags::W,
+    //         )?;
 
-            self.root_table.id_map_range(
-                frame_allocator(),
-                PhysAddress::from(KERNEL_STACK_START),
-                PhysAddress::from(KERNEL_STACK_END),
-                PteFlags::R | PteFlags::W,
-            )?;
-        }
-        Ok(())
-    }
+    //         self.root_table.id_map_range(
+    //             frame_allocator(),
+    //             PhysAddress::from(KERNEL_STACK_START),
+    //             PhysAddress::from(KERNEL_STACK_END),
+    //             PteFlags::R | PteFlags::W,
+    //         )?;
+    //     }
+    //     Ok(())
+    // }
 }
 
 /// A contiguous sequence of allocation nodes spanning the kernel heap region.
@@ -238,13 +221,13 @@ unsafe impl Send for AllocationList {}
 
 impl AllocationList {
     /// Get the memory address of the list head.
-    pub(crate) fn head_addr(&self) -> PhysAddress {
-        PhysAddress::from(self.head.as_raw() as usize)
+    pub(crate) fn head_addr(&self) -> PhysAddr {
+        PhysAddr::from(self.head.as_raw() as usize)
     }
 
     /// Get the memory address of the list tail.
-    pub(crate) fn tail_addr(&self) -> PhysAddress {
-        PhysAddress::from(self.tail as usize)
+    pub(crate) fn tail_addr(&self) -> PhysAddr {
+        PhysAddr::from(self.tail as usize)
     }
 
     /// Return an iterator over all nodes in the list.
@@ -293,17 +276,12 @@ impl<'a> Iterator for NodeIter<'a> {
     }
 }
 
-/// A non-null pointer to an [`AllocationNode`] within the kernel heap region.
+/// A non-null pointer to an [`AllocNode`] within the kernel heap region.
 ///
-/// It's unsafe to construct a `NodePtr` and it must be ensure that every `NodePtr`
-/// points to a valid, aligned, `&'static AllocationNode` inside the heap region.
+/// Constructing a `NodePtr` is unsafe because the caller must ensure that the pointer points to a
+/// valid and aligned [`AllocNode`] *within* the kernel's heap region.
 #[derive(Clone, Copy)]
 struct NodePtr(NonNull<AllocNode>);
-
-// SAFETY: `NodePtr` wraps a `NonNull<AllocationNode>` that always points into
-// the kernel heap - a `'static` memory region that is never moved or freed.
-// Access is synchronised by the `SpinMutex` that guards `Allocator`.
-unsafe impl Send for NodePtr {}
 
 impl NodePtr {
     /// Create a `NodePtr` from a raw pointer.
