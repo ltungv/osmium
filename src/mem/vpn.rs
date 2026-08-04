@@ -1,15 +1,15 @@
 use core::{fmt, ops};
 
-use crate::mem::{PAGE_SIZE_BITS, addr::VirtAddress};
+use crate::{PAGE_ORDER, addr::VirtAddr};
 
 const VPN_BITS: usize = 27;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct VirtPageNumber(usize);
 
-impl fmt::Debug for VirtPageNumber {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "VPN(0x{:x})", self.0)
+impl VirtPageNumber {
+    pub(crate) fn indices(self) -> [usize; 3] {
+        [self.0 & 0x1ff, self.0 >> 9 & 0x1ff, self.0 >> 18 & 0x1ff]
     }
 }
 
@@ -33,14 +33,14 @@ impl From<usize> for VirtPageNumber {
     }
 }
 
-impl From<VirtAddress> for VirtPageNumber {
-    fn from(addr: VirtAddress) -> Self {
-        Self(usize::from(addr) >> PAGE_SIZE_BITS)
+impl From<VirtAddr> for VirtPageNumber {
+    fn from(addr: VirtAddr) -> Self {
+        Self(usize::from(addr) >> PAGE_ORDER)
     }
 }
 
-impl VirtPageNumber {
-    pub(crate) fn indices(self) -> [usize; 3] {
-        [self.0 & 0x1ff, self.0 >> 9 & 0x1ff, self.0 >> 18 & 0x1ff]
+impl fmt::Debug for VirtPageNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "vpn@{:x}", self.0)
     }
 }

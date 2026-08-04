@@ -1,15 +1,37 @@
 use core::{fmt, ops, slice};
 
-use crate::mem::{PAGE_SIZE, PAGE_SIZE_BITS, addr::PhysAddress};
+use crate::{PAGE_ORDER, PAGE_SIZE, addr::PhysAddr};
 
 const PPN_BITS: usize = 44;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysPageNumber(usize);
 
-impl fmt::Debug for PhysPageNumber {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PPN(0x{:x})", self.0)
+impl PhysPageNumber {
+    pub fn as_slice<T>(self) -> &'static [T] {
+        unsafe {
+            slice::from_raw_parts(
+                PhysAddr::from(self).as_ptr::<T>(),
+                PAGE_SIZE / size_of::<T>(),
+            )
+        }
+    }
+
+    pub fn as_slice_mut<T>(self) -> &'static mut [T] {
+        unsafe {
+            slice::from_raw_parts_mut(
+                PhysAddr::from(self).as_ptr_mut::<T>(),
+                PAGE_SIZE / size_of::<T>(),
+            )
+        }
+    }
+}
+
+impl ops::BitXor<usize> for PhysPageNumber {
+    type Output = Self;
+
+    fn bitxor(self, rhs: usize) -> Self::Output {
+        Self(self.0 ^ rhs)
     }
 }
 
@@ -33,31 +55,14 @@ impl From<usize> for PhysPageNumber {
     }
 }
 
-impl From<PhysAddress> for PhysPageNumber {
-    fn from(addr: PhysAddress) -> Self {
-        Self(usize::from(addr) >> PAGE_SIZE_BITS)
+impl From<PhysAddr> for PhysPageNumber {
+    fn from(addr: PhysAddr) -> Self {
+        Self(usize::from(addr) >> PAGE_ORDER)
     }
 }
-
-impl PhysPageNumber {
-    pub(crate) fn as_slice<T>(self) -> &'static [T] {
-        let physical_address = PhysAddress::from(self);
-        unsafe {
-            slice::from_raw_parts(
-                physical_address.as_ptr().cast::<T>(),
-                PAGE_SIZE / size_of::<T>(),
-            )
-        }
-    }
-
-    pub(crate) fn as_slice_mut<T>(self) -> &'static mut [T] {
-        let physical_address = PhysAddress::from(self);
-        unsafe {
-            slice::from_raw_parts_mut(
-                physical_address.as_ptr_mut().cast::<T>(),
-                PAGE_SIZE / size_of::<T>(),
-            )
-        }
+impl fmt::Debug for PhysPageNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ppn@{:x}", self.0)
     }
 }
 
@@ -65,6 +70,18 @@ impl PhysPageNumber {
 pub(crate) struct PpnRange {
     ppn: PhysPageNumber,
     len: usize,
+}
+
+impl PpnRange {
+    pub(crate) fn new(start: PhysPageNumber, end: PhysPageNumber) -> Option<Self> {
+        if end < start {
+            return None;
+        }
+        Some(Self {
+            ppn: start,
+            len: usize::from(end) - usize::from(start),
+        })
+    }
 }
 
 impl IntoIterator for PpnRange {
@@ -77,14 +94,6 @@ impl IntoIterator for PpnRange {
             ppn: self.ppn,
             len: self.len,
         }
-    }
-}
-
-impl PpnRange {
-    pub(crate) fn new(start: PhysPageNumber, end: PhysPageNumber) -> Self {
-        assert!(end >= start);
-        let len = usize::from(end) - usize::from(start);
-        Self { ppn: start, len }
     }
 }
 
@@ -101,7 +110,7 @@ impl Iterator for PpnRangeIter {
             return None;
         }
         let ppn = self.ppn;
-        self.ppn = self.ppn + 1;
+        self.ppn = ppn + 1;
         self.len -= 1;
         Some(ppn)
     }
