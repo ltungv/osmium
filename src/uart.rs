@@ -1,13 +1,12 @@
-//! Driver for the NS16550D UART hardware.
+//! A driver for 16550 UART devices, typically known and used as serial ports or COM ports.
 
-use core::{fmt::Write, hint::spin_loop};
-
-use spin::{
-    Once,
-    mutex::{SpinMutex, SpinMutexGuard},
+use core::{
+    fmt::{self, Write},
+    num::NonZeroU8,
+    ptr::NonNull,
 };
 
-/// Print to a monitor using UART.
+/// Print to an UART port.
 #[macro_export]
 macro_rules! print {
     ($($args:tt)*) => {{
@@ -17,7 +16,7 @@ macro_rules! print {
     }};
 }
 
-/// Print to a monitor using UART, with a newline.
+/// Print to an UART port, with a newline.
 #[macro_export]
 macro_rules! println {
     () => (print!("\r\n"));
@@ -27,89 +26,137 @@ macro_rules! println {
 /// Default UART base address on the `virt` machine in QEMU.
 pub(crate) const BASE_ADDRESS: usize = 0x1000_0000;
 
-/// Global UART driver instance.
-static DRIVER: Once<SpinMutex<UartDriver>> = Once::new();
+static UART16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
 
 /// Initialize the global UART driver state.
 pub(crate) fn initialize() {
-    DRIVER.call_once(|| {
-        let mut driver = unsafe { UartDriver::new(BASE_ADDRESS) };
+    UART16550.call_once(|| {
+        let mut driver = unsafe {
+            let base = NonNull::new_unchecked(BASE_ADDRESS as *mut u8);
+            Uart16550::new(base, 1).expect("16550 UART device address is valid")
+        };
         driver.initialize();
-        SpinMutex::new(driver)
+        spin::Mutex::new(driver)
     });
 }
 
 /// Acquire unique access to the global UART driver.
-pub(crate) fn driver() -> SpinMutexGuard<'static, UartDriver> {
-    DRIVER.get().expect("initialized UART driver").lock()
+pub(crate) fn driver() -> spin::MutexGuard<'static, Uart16550, spin::Spin> {
+    UART16550
+        .get()
+        .expect("16550 UART device driver is initialized")
+        .lock()
 }
 
-/// A driver for NS16550D (Universal Asynchronous Receiver/Transmitter with FIFOs).
-pub(crate) struct UartDriver(&'static mut [u8; 8]);
+#[derive(Debug)]
+pub(crate) enum InvalidAddressError {
+    /// The given base pointer is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
+    /// consecutive addresses.
+    InvalidBase(NonNull<u8>),
+
+    /// The given stride is invalid. A stride must be non-zero and a power of two.
+    InvalidStride(u8),
+}
+
+impl fmt::Display for InvalidAddressError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidBase(base) => {
+                write!(f, "{base:p} is not a valid 16550 UART device base address")
+            }
+            Self::InvalidStride(stride) => write!(
+                f,
+                "stride must be non-zero and a power of two; got {stride}"
+            ),
+        }
+    }
+}
+
+/// A driver for 16550 UART devices backed by memory-mapped I/O addresses.
+pub(crate) struct Uart16550 {
+    base: NonNull<u8>,
+    stride: NonZeroU8,
+}
+
+// SAFETY: `Uart16550` is not `Sync`, so concurrent access from multiple thread is not possible
+// without additional synchronizations. The base pointer is ensured to points to a physical memory
+// region large enough to accomodate `NUM_REGISTERS` addresses, and access to the region is given
+// exclusively to the driver instance. All operations take a `&mut self` which ensures the driver is
+// only accessed by at most one thread at a time.
+unsafe impl Send for Uart16550 {}
 
 #[allow(dead_code)]
-impl UartDriver {
+impl Uart16550 {
     /// Receiver holding register.
-    const RHR: usize = 0b000;
+    const RHR: usize = 0;
 
     /// Transmitter holding register.
-    const THR: usize = 0b000;
+    const THR: usize = 0;
 
     /// Interrupt enable register
-    const IER: usize = 0b001;
+    const IER: usize = 1;
 
     /// Interrupt status register
-    const ISR: usize = 0b010;
+    const ISR: usize = 2;
 
     /// FIFO control register
-    const FCR: usize = 0b010;
+    const FCR: usize = 2;
 
     /// Line control register
-    const LCR: usize = 0b011;
+    const LCR: usize = 3;
 
     /// Modem control register
-    const MCR: usize = 0b100;
+    const MCR: usize = 4;
 
     /// Line status register
-    const LSR: usize = 0b101;
+    const LSR: usize = 5;
 
     /// Modem status register
-    const MSR: usize = 0b110;
+    const MSR: usize = 6;
 
     /// Scratch pad register
-    const SPR: usize = 0b111;
+    const SPR: usize = 7;
 
     /// Divisor latch, least significant byte
-    const DLL: usize = 0b000;
+    const DLL: usize = 0;
 
     /// Divisor latch, most significant byte
-    const DLM: usize = 0b001;
+    const DLM: usize = 1;
 
     /// Prescaler division
-    const PSD: usize = 0b101;
+    const PSD: usize = 3;
 
-    /// Create a new UART driver with the given base address.
-    ///
-    /// # Safety
-    ///
-    /// The given address must be the memory-mapped physical address of the UART hardware.
-    pub(crate) const unsafe fn new(addr: usize) -> Self {
-        let ptr = addr as *mut [u8; 8];
-        Self(unsafe { &mut *ptr })
+    /// Number of registers of the device.
+    const NUM_REGISTERS: usize = 8;
+
+    pub(crate) unsafe fn new(base: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
+        if !stride.is_power_of_two() {
+            return Err(InvalidAddressError::InvalidStride(stride));
+        }
+        let Some(stride) = NonZeroU8::new(stride) else {
+            return Err(InvalidAddressError::InvalidStride(stride));
+        };
+        if (base.as_ptr() as usize)
+            .checked_add((Self::NUM_REGISTERS - 1) * stride.get() as usize)
+            .is_none()
+        {
+            return Err(InvalidAddressError::InvalidBase(base));
+        }
+        Ok(Self { base, stride })
     }
 
     /// Put a byte into the transmitter holding register (thr) blocking until the byte is ready to be sent.
-    pub(crate) fn put(&mut self, byte: u8) -> Option<()> {
+    pub(crate) fn put(&mut self, byte: u8) -> bool {
         if self.rd_reg(Self::LSR) & (1 << 6) == 0 {
-            None
+            false
         } else {
             self.wr_reg(Self::THR, byte);
-            Some(())
+            true
         }
     }
 
     /// Get the next available byte from the receiver buffer register (rbr).
-    pub(crate) fn get(&self) -> Option<u8> {
+    pub(crate) fn get(&mut self) -> Option<u8> {
         if self.rd_reg(Self::LSR) & (1 << 0) == 0 {
             None
         } else {
@@ -118,17 +165,28 @@ impl UartDriver {
     }
 
     /// Read a byte from a register offset
-    fn rd_reg(&self, offset: usize) -> u8 {
-        unsafe { core::ptr::read_volatile(&self.0[offset]) }
+    fn rd_reg(&mut self, offset: usize) -> u8 {
+        unsafe {
+            self.base
+                .add(offset * self.stride.get() as usize)
+                .read_volatile()
+        }
     }
 
     /// Write a byte to a register offset
     fn wr_reg(&mut self, offset: usize, value: u8) {
-        unsafe { core::ptr::write_volatile(&mut self.0[offset], value) };
+        unsafe {
+            self.base
+                .add(offset * self.stride.get() as usize)
+                .write_volatile(value)
+        }
     }
 
     /// Initialize the UART hardware registers.
     fn initialize(&mut self) {
+        // Disable all interrupts during initialization.
+        self.wr_reg(Self::IER, 0);
+
         // Data word length: 8 bits.
         let lcr_value = 1 << 1 | 1 << 0;
 
@@ -141,23 +199,19 @@ impl UartDriver {
         // divisor = ceil(591.901)
         // divisor = 592
         let divisor = 592u16;
-        let divisor_ls = divisor & 0xff;
-        let divisor_ms = divisor >> 8;
+        {
+            // Enable DLAB to access the divisor latches (offsets 0 and 1 become DLL/DLM).
+            self.wr_reg(Self::LCR, lcr_value | 1 << 7);
 
-        // Disable all interrupts during initialization.
-        self.wr_reg(Self::IER, 0);
+            // Set divisor least significant byte.
+            self.wr_reg(Self::DLL, (divisor & 0xff) as u8);
 
-        // Enable DLAB to access the divisor latches (offsets 0 and 1 become DLL/DLM).
-        self.wr_reg(Self::LCR, lcr_value | 1 << 7);
+            // Set divisor most significant byte.
+            self.wr_reg(Self::DLM, (divisor >> 8) as u8);
 
-        // Set divisor least significant byte.
-        self.wr_reg(Self::DLL, divisor_ls as u8);
-
-        // Set divisor most significant byte.
-        self.wr_reg(Self::DLM, divisor_ms as u8);
-
-        // Disable DLAB and set data word length to 8 bits.
-        self.wr_reg(Self::LCR, lcr_value);
+            // Disable DLAB and set data word length to 8 bits.
+            self.wr_reg(Self::LCR, lcr_value);
+        }
 
         // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
         self.wr_reg(Self::FCR, 1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
@@ -171,11 +225,11 @@ impl UartDriver {
     }
 }
 
-impl Write for UartDriver {
+impl Write for Uart16550 {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         s.bytes().for_each(|b| {
-            while self.put(b).is_none() {
-                spin_loop();
+            while !self.put(b) {
+                core::hint::spin_loop();
             }
         });
         Ok(())
