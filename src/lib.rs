@@ -4,28 +4,32 @@
 #![no_std]
 #![warn(
     clippy::all,
-    clippy::cargo,
     clippy::missing_safety_doc,
     clippy::nursery,
     clippy::pedantic,
     missing_debug_implementations,
-    missing_docs,
+    // missing_docs,
     rust_2018_idioms,
     rust_2021_compatibility,
     rust_2024_compatibility,
-    rustdoc::all,
-    unreachable_pub
+    rustdoc::all
 )]
+
+extern crate alloc;
 
 mod addr;
 mod mem;
 mod uart;
 
-use core::arch::asm;
+use core::{arch::asm, ptr::NonNull};
 
+use alloc::vec::Vec;
 use mem::frame_allocator;
 
-use crate::mem::ppn::PhysPageNumber;
+use crate::{
+    addr::VirtAddr,
+    mem::{kheap_allocator, ppn::PhysPageNumber},
+};
 
 /// The size of a page in bytes.
 pub const PAGE_SIZE: usize = 1 << PAGE_ORDER;
@@ -80,74 +84,86 @@ unsafe extern "C" {
 const NPAGES: usize = 16;
 
 #[unsafe(no_mangle)]
-extern "C" fn kinit() -> usize {
+pub extern "C" fn kinit() -> usize {
     uart::initialize();
     mem::initialize_frame_allocator();
-    // mem::initialize_kheap_allocator();
+    mem::initialize_kheap_allocator();
     println!("{:?}\n", frame_allocator());
 
-    let mut pages: [Option<PhysPageNumber>; NPAGES] = [None; NPAGES];
-    for page in &mut pages {
-        *page = frame_allocator().alloc(0);
-        // println!("{:?}\n", frame_allocator());
+    println!("---------------------------------------------");
+    println!("{:?}\n", frame_allocator());
+    println!("---------------------------------------------");
+
+    let mut ppns: [Option<PhysPageNumber>; NPAGES] = [None; NPAGES];
+    for (order, page) in ppns.iter_mut().take(12).enumerate().rev() {
+        let ppn = frame_allocator().alloc(order);
+        *page = ppn;
+        println!("alloc {ppn:?}");
     }
 
-    println!("---------------------------------------------\n");
-    for &ppn in pages.iter().flatten() {
+    println!("---------------------------------------------");
+    println!("{:?}\n", frame_allocator());
+    println!("---------------------------------------------");
+
+    for &ppn in ppns.iter().flatten() {
         frame_allocator().dealloc(ppn);
-        // println!("{:?}\n", frame_allocator());
+        println!("dealloc {ppn:?}");
     }
 
-    // let p = unsafe { VirtAddress::from(HEAP_START) };
-    // let m = kheap_allocator().translate(p).unwrap_or(0.into());
-    // println!("Walk {:?} = {:?}", p, m);
+    println!("---------------------------------------------");
+    println!("{:?}\n", frame_allocator());
+    println!("---------------------------------------------");
 
-    // let p = VirtAddress::from(uart::BASE_ADDRESS);
-    // let m = kheap_allocator().translate(p).unwrap_or(0.into());
-    // println!("Walk {:?} = {:?}", p, m);
+    let p = unsafe { VirtAddr::from(HEAP_START) };
+    let m = kheap_allocator().translate(p).unwrap_or_else(|| 0.into());
+    println!("Walk {:?} = {:?}", p, m);
 
-    // kheap_allocator().satp()
-    todo!("implement the page mapper and compose the satp value from the root table page number")
+    let p = VirtAddr::from(uart::BASE_ADDRESS);
+    let m = kheap_allocator().translate(p).unwrap_or_else(|| 0.into());
+    println!("Walk {:?} = {:?}", p, m);
+
+    kheap_allocator().satp()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn kmain() {
-    // println!("hello, world!");
-    // {
-    //     let v1: Vec<u8> = Vec::with_capacity(8);
-    //     let v2: Vec<u8> = Vec::with_capacity(8);
-    //     let v3: Vec<u8> = Vec::with_capacity(8);
-    //     println!("{:?}", kheap_allocator());
+pub extern "C" fn kmain() {
+    println!("hello, world!");
+    {
+        let v1: Vec<u8> = Vec::with_capacity(8);
+        let v2: Vec<u8> = Vec::with_capacity(8);
+        let v3: Vec<u8> = Vec::with_capacity(8);
+        println!("{:?}", kheap_allocator());
 
-    //     drop(v2);
-    //     println!("{:?}", kheap_allocator());
+        drop(v2);
+        println!("{:?}", kheap_allocator());
 
-    //     let v4: Vec<u8> = Vec::with_capacity(64);
-    //     println!("{:?}", kheap_allocator());
+        let v4: Vec<u8> = Vec::with_capacity(64);
+        println!("{:?}", kheap_allocator());
 
-    //     drop(v1);
-    //     drop(v3);
-    //     drop(v4);
-    // }
+        drop(v1);
+        drop(v3);
+        drop(v4);
+    }
 
-    // println!("triggering faults...");
-    // unsafe {
-    //     // Set the next machine timer to fire.
-    //     let mtimecmp = 0x0200_4000 as *mut u64;
-    //     let mtime = 0x0200_bff8 as *const u64;
-    //     // The frequency given by QEMU is 10_000_000 Hz, so this sets
-    //     // the next interrupt to fire one second from now.
-    //     mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
+    println!("triggering faults...");
+    unsafe {
+        // Set the next machine timer to fire.
+        let mtimecmp = 0x0200_4000 as *mut u64;
+        let mtime = 0x0200_bff8 as *const u64;
+        // The frequency given by QEMU is 10_000_000 Hz, so this sets
+        // the next interrupt to fire one second from now.
+        mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
 
-    //     // Let's cause a page fault and see what happens. This should trap
-    //     // to m_trap under trap.rs
-    //     let v = NonNull::dangling();
-    //     v.write_volatile(0);
+        // Let's cause a page fault and see what happens. This should trap
+        // to m_trap under trap.rs
+        let v = NonNull::dangling();
+        v.write_volatile(0);
+    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
-struct TrapFrame {
+pub struct TrapFrame {
     gp_regs: [usize; 32],
     fp_regs: [usize; 32],
     satp: usize,
@@ -158,8 +174,11 @@ struct TrapFrame {
     mode: usize,
 }
 
+/// # Panics
+///
+/// This will panic when most traps occur because we haven't implemented a handler for them.
 #[unsafe(no_mangle)]
-extern "C" fn mtrap(
+pub extern "C" fn mtrap(
     epc: usize,
     tval: usize,
     cause: usize,
@@ -192,7 +211,7 @@ extern "C" fn mtrap(
                 println!("Machine external interrupt CPU#{}", hartid);
             }
             _ => {
-                panic!("Unhandled async trap CPU#{} -> {}\n", hartid, cause_code);
+                panic!("Unhandled async trap CPU#{hartid} -> {cause_code}\n");
             }
         }
     } else {
@@ -200,10 +219,7 @@ extern "C" fn mtrap(
         match cause_code {
             2 => {
                 // Illegal instruction
-                panic!(
-                    "Illegal instruction CPU#{} -> 0x{:08x}: 0x{:08x}\n",
-                    hartid, epc, tval
-                );
+                panic!("Illegal instruction CPU#{hartid} -> 0x{epc:08x}: 0x{tval:08x}\n");
             }
             8 => {
                 // Environment (system) call from User mode
@@ -220,10 +236,7 @@ extern "C" fn mtrap(
             }
             11 => {
                 // Environment (system) call from Machine mode
-                panic!(
-                    "E-call from Machine mode! CPU#{} -> 0x{:08x}\n",
-                    hartid, epc
-                );
+                panic!("E-call from Machine mode! CPU#{hartid} -> 0x{epc:08x}\n");
             }
             // Page faults
             12 => {
@@ -251,16 +264,16 @@ extern "C" fn mtrap(
                 program_counter += 4;
             }
             _ => {
-                panic!("Unhandled sync trap CPU#{} -> {}\n", hartid, cause_code);
+                panic!("Unhandled sync trap CPU#{hartid} -> {cause_code}\n");
             }
         }
-    };
+    }
     // Finally, return the updated program counter
     program_counter
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn eh_personality() {}
+pub const extern "C" fn eh_personality() {}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
