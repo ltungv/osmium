@@ -1,15 +1,15 @@
-mod buddy_alloc;
-// pub mod frame;
-pub mod heap;
-pub mod page;
 pub mod ppn;
 pub mod vpn;
 
+mod buddy;
+mod heap;
+mod page;
+
 use core::alloc::{GlobalAlloc, Layout};
 
-use crate::{HEAP_SIZE, HEAP_START, mem::buddy_alloc::BuddyAllocator};
+use crate::{HEAP_SIZE, HEAP_START, mem::buddy::BuddyAlloc};
 
-static FRAME_ALLOCATOR: spin::Once<spin::Mutex<BuddyAllocator>> = spin::Once::new();
+static FRAME_ALLOCATOR: spin::Once<BuddyAlloc> = spin::Once::new();
 
 static KHEAP_ALLOCATOR: spin::Once<spin::Mutex<heap::Allocator>> = spin::Once::new();
 
@@ -19,31 +19,30 @@ static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator;
 /// Initialize the global frame allocator.
 pub fn initialize_frame_allocator() {
     FRAME_ALLOCATOR.call_once(|| unsafe {
-        spin::Mutex::new(buddy_alloc::BuddyAllocator::new(
-            HEAP_START.into(),
-            HEAP_SIZE,
-        ))
+        buddy::BuddyAlloc::new(HEAP_START.into(), HEAP_SIZE)
+            .expect("`HEAP_START` and `HEAP_SIZE` represents a valid memory region")
     });
 }
 
 /// Initialize the kernel heap allocator.
 pub fn initialize_kheap_allocator() {
     KHEAP_ALLOCATOR.call_once(|| {
-        let allocator = heap::Allocator::new(&mut frame_allocator())
-            .expect("initialized kernel heap allocator");
+        let allocator = heap::Allocator::new(frame_allocator())
+            .expect("device has enough memory to accomodate the kernel's heep");
 
-        allocator.identity_map().expect("mapped kernel memory");
+        allocator
+            .identity_map()
+            .expect("kernel's address space is identity mapped");
+
         spin::Mutex::new(allocator)
     });
 }
 
-// TODO: Expose `alloc/dealloc` so user can't take a `MutexGuard` and accidentally deadlock.
 /// Get a reference to the frame allocator.
-pub fn frame_allocator() -> spin::MutexGuard<'static, BuddyAllocator, spin::Spin> {
+pub fn frame_allocator() -> &'static BuddyAlloc {
     FRAME_ALLOCATOR
         .get()
-        .expect("initialized frame allocator")
-        .lock()
+        .expect("kernel's frame allocator has been initialized")
 }
 
 // TODO: Expose `alloc/dealloc` so user can't take a `MutexGuard` and accidentally deadlock.
@@ -51,7 +50,7 @@ pub fn frame_allocator() -> spin::MutexGuard<'static, BuddyAllocator, spin::Spin
 pub fn kheap_allocator() -> spin::MutexGuard<'static, heap::Allocator, spin::Spin> {
     KHEAP_ALLOCATOR
         .get()
-        .expect("initialized kernel heap allocator")
+        .expect("kernel's heap allocator has been initialized")
         .lock()
 }
 
