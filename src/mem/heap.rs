@@ -7,7 +7,7 @@ use crate::{
     KERNEL_STACK_START, PAGE_SIZE, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
     addr::{PhysAddr, VirtAddr},
     mem::{
-        buddy_alloc::BuddyAllocator,
+        buddy::BuddyAlloc,
         frame_allocator,
         page::{self, PteFlags},
         ppn::PhysPageNumber,
@@ -32,7 +32,7 @@ impl fmt::Debug for Allocator {
 
 impl Allocator {
     /// Initialize the kernel's memory.
-    pub fn new(frame_allocator: &mut BuddyAllocator) -> Option<Self> {
+    pub fn new(frame_allocator: &BuddyAlloc) -> Option<Self> {
         let root_ppn = frame_allocator.zalloc(0)?;
         let head_ppn = frame_allocator.zalloc(6)?;
         let tail_ppn = head_ppn + PAGE_COUNT;
@@ -60,8 +60,8 @@ impl Allocator {
     }
 
     /// Returns the identification of the root frame of the kernel.
-    pub fn satp(&self) -> usize {
-        8 << 60 | usize::from(self.root_ppn)
+    pub const fn satp(&self) -> usize {
+        self.root_ppn.satp()
     }
 
     /// Allocate `size` bytes (8-byte aligned).
@@ -159,7 +159,7 @@ impl Allocator {
         let root_table = self.root_ppn.as_page_table_mut();
 
         root_table.map(
-            &mut frame_allocator(),
+            frame_allocator(),
             VirtAddr::from(uart::BASE_ADDRESS).into(),
             PhysAddr::from(uart::BASE_ADDRESS).into(),
             PteFlags::R | PteFlags::W,
@@ -167,7 +167,7 @@ impl Allocator {
         )?;
 
         root_table.id_map_range(
-            &mut frame_allocator(),
+            frame_allocator(),
             self.alloc_list.head_addr(),
             self.alloc_list.tail_addr(),
             PteFlags::R | PteFlags::W,
@@ -177,42 +177,42 @@ impl Allocator {
         // provided by the linker and represent the kernel's memory layout.
         unsafe {
             root_table.id_map_range(
-                &mut frame_allocator(),
+                frame_allocator(),
                 PhysAddr::from(HEAP_START),
                 PhysAddr::from(HEAP_START) + HEAP_SIZE,
                 PteFlags::R | PteFlags::W,
             )?;
 
             root_table.id_map_range(
-                &mut frame_allocator(),
+                frame_allocator(),
                 PhysAddr::from(TEXT_START),
                 PhysAddr::from(TEXT_END),
                 PteFlags::R | PteFlags::X,
             )?;
 
             root_table.id_map_range(
-                &mut frame_allocator(),
+                frame_allocator(),
                 PhysAddr::from(RODATA_START),
                 PhysAddr::from(RODATA_END),
                 PteFlags::R | PteFlags::X,
             )?;
 
             root_table.id_map_range(
-                &mut frame_allocator(),
+                frame_allocator(),
                 PhysAddr::from(DATA_START),
                 PhysAddr::from(DATA_END),
                 PteFlags::R | PteFlags::W,
             )?;
 
             root_table.id_map_range(
-                &mut frame_allocator(),
+                frame_allocator(),
                 PhysAddr::from(BSS_START),
                 PhysAddr::from(BSS_END),
                 PteFlags::R | PteFlags::W,
             )?;
 
             root_table.id_map_range(
-                &mut frame_allocator(),
+                frame_allocator(),
                 PhysAddr::from(KERNEL_STACK_START),
                 PhysAddr::from(KERNEL_STACK_END),
                 PteFlags::R | PteFlags::W,

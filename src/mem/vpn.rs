@@ -1,6 +1,6 @@
 use core::{fmt, ops};
 
-use crate::{PAGE_ORDER, addr::VirtAddr};
+use crate::{addr::VirtAddr, mem::ppn::PhysPageNumber};
 
 const VPN_BITS: usize = 27;
 
@@ -8,6 +8,10 @@ const VPN_BITS: usize = 27;
 pub struct VirtPageNumber(usize);
 
 impl VirtPageNumber {
+    pub fn identity_map(self) -> PhysPageNumber {
+        PhysPageNumber::from(self.0)
+    }
+
     pub const fn indices(self) -> [usize; 3] {
         [self.0 & 0x1ff, self.0 >> 9 & 0x1ff, self.0 >> 18 & 0x1ff]
     }
@@ -21,21 +25,23 @@ impl ops::Add<usize> for VirtPageNumber {
     }
 }
 
-impl From<VirtPageNumber> for usize {
-    fn from(vpn: VirtPageNumber) -> Self {
-        vpn.0
+impl ops::Sub<Self> for VirtPageNumber {
+    type Output = usize;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.0 - rhs.0
+    }
+}
+
+impl From<VirtPageNumber> for VirtAddr {
+    fn from(ppn: VirtPageNumber) -> Self {
+        Self::from(ppn.0 << 12)
     }
 }
 
 impl From<usize> for VirtPageNumber {
     fn from(bits: usize) -> Self {
         Self(bits & ((1 << VPN_BITS) - 1))
-    }
-}
-
-impl From<VirtAddr> for VirtPageNumber {
-    fn from(addr: VirtAddr) -> Self {
-        Self(usize::from(addr) >> PAGE_ORDER)
     }
 }
 
