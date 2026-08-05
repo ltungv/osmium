@@ -1,20 +1,20 @@
 //! Functions and types for managing physical frames.
 
-use core::{fmt, mem::size_of, slice};
+use core::fmt;
 
 use bitflags::bitflags;
 
 use crate::{PAGE_SIZE, addr::PhysAddr, mem::ppn::PhysPageNumber};
 
 /// An allocator for 4096-byte physical frames.
-pub(crate) struct Allocator {
+pub struct Allocator {
     base_ppn: PhysPageNumber,
     descriptors: &'static mut [FrameDescriptor],
 }
 
 impl fmt::Debug for Allocator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let desc_total_size = self.descriptors.len() * size_of::<FrameDescriptor>();
+        let desc_total_size = core::mem::size_of_val(self.descriptors);
         let desc_begin = PhysAddr::from(self.descriptors.as_ptr() as usize);
         let desc_end = desc_begin + desc_total_size;
 
@@ -29,8 +29,8 @@ impl fmt::Debug for Allocator {
             self.descriptors.len(),
             alloc_total_size,
         )?;
-        writeln!(f, "desc: {:?} -> {:?}", desc_begin, desc_end)?;
-        writeln!(f, "phys: {:?} -> {:?}", alloc_begin, alloc_end)?;
+        writeln!(f, "desc: {desc_begin:?} -> {desc_end:?}")?;
+        writeln!(f, "phys: {alloc_begin:?} -> {alloc_end:?}")?;
         writeln!(f, "------------------------------------")?;
         let mut current_pages_begin = None;
         let mut count_taken = 0;
@@ -101,8 +101,8 @@ impl Allocator {
 
     /// Allocates a contiguous region of `pages` and returns the address at the start of the region.
     /// If there's not enough memory, returns `None`.
-    pub(crate) fn alloc(&mut self, pages: usize) -> Option<PhysPageNumber> {
-        let offset = Self::find_free_pages(&self.descriptors, pages)?;
+    pub fn alloc(&mut self, pages: usize) -> Option<PhysPageNumber> {
+        let offset = Self::find_free_pages(self.descriptors, pages)?;
 
         self.descriptors[offset + pages - 1].set(FrameDescriptorFlags::LAST);
         self.descriptors[offset..offset + pages]

@@ -24,12 +24,12 @@ macro_rules! println {
 }
 
 /// Default UART base address on the `virt` machine in QEMU.
-pub(crate) const BASE_ADDRESS: usize = 0x1000_0000;
+pub const BASE_ADDRESS: usize = 0x1000_0000;
 
 static UART16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
 
 /// Initialize the global UART driver state.
-pub(crate) fn initialize() {
+pub fn initialize() {
     UART16550.call_once(|| {
         let mut driver = unsafe {
             let base = NonNull::new_unchecked(BASE_ADDRESS as *mut u8);
@@ -41,7 +41,7 @@ pub(crate) fn initialize() {
 }
 
 /// Acquire unique access to the global UART driver.
-pub(crate) fn driver() -> spin::MutexGuard<'static, Uart16550, spin::Spin> {
+pub fn driver() -> spin::MutexGuard<'static, Uart16550, spin::Spin> {
     UART16550
         .get()
         .expect("16550 UART device driver is initialized")
@@ -49,7 +49,7 @@ pub(crate) fn driver() -> spin::MutexGuard<'static, Uart16550, spin::Spin> {
 }
 
 #[derive(Debug)]
-pub(crate) enum InvalidAddressError {
+pub enum InvalidAddressError {
     /// The given base pointer is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
     /// consecutive addresses.
     InvalidBase(NonNull<u8>),
@@ -73,7 +73,7 @@ impl fmt::Display for InvalidAddressError {
 }
 
 /// A driver for 16550 UART devices backed by memory-mapped I/O addresses.
-pub(crate) struct Uart16550 {
+pub struct Uart16550 {
     base: NonNull<u8>,
     stride: NonZeroU8,
 }
@@ -129,7 +129,7 @@ impl Uart16550 {
     /// Number of registers of the device.
     const NUM_REGISTERS: usize = 8;
 
-    pub(crate) unsafe fn new(base: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
+    pub unsafe fn new(base: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
         if !stride.is_power_of_two() {
             return Err(InvalidAddressError::InvalidStride(stride));
         }
@@ -178,7 +178,7 @@ impl Uart16550 {
         unsafe {
             self.base
                 .add(offset * self.stride.get() as usize)
-                .write_volatile(value)
+                .write_volatile(value);
         }
     }
 

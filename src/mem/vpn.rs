@@ -5,10 +5,10 @@ use crate::{PAGE_ORDER, addr::VirtAddr};
 const VPN_BITS: usize = 27;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct VirtPageNumber(usize);
+pub struct VirtPageNumber(usize);
 
 impl VirtPageNumber {
-    pub(crate) fn indices(self) -> [usize; 3] {
+    pub const fn indices(self) -> [usize; 3] {
         [self.0 & 0x1ff, self.0 >> 9 & 0x1ff, self.0 >> 18 & 0x1ff]
     }
 }
