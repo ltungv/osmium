@@ -7,7 +7,7 @@ use bitflags::bitflags;
 use crate::{
     addr::{PhysAddr, VirtAddr},
     mem::{
-        buddy_alloc::BuddyAllocator,
+        buddy::BuddyAlloc,
         ppn::{PhysPageNumber, PpnRange},
         vpn::VirtPageNumber,
     },
@@ -36,7 +36,7 @@ impl PageTable {
     /// Create a mapping between the given virtual address and physical address.
     pub fn map(
         &mut self,
-        frame_allocator: &mut BuddyAllocator,
+        frame_allocator: &BuddyAlloc,
         vpn: VirtPageNumber,
         ppn: PhysPageNumber,
         flags: PteFlags,
@@ -48,17 +48,17 @@ impl PageTable {
         for &index_next in indices[lvl..2].iter().rev() {
             if !pte.flags().contains(PteFlags::V) {
                 let inner_ppn = frame_allocator.zalloc(0).ok_or(Error::OutOfMemory)?;
-                *pte = PageTableEntry::new(inner_ppn, PteFlags::V);
+                *pte = inner_ppn.as_pte(PteFlags::V);
             }
             pte = &mut pte.ppn().as_slice_mut::<PageTableEntry>()[index_next];
         }
-        *pte = PageTableEntry::new(ppn, flags | PteFlags::V);
+        *pte = ppn.as_pte(flags | PteFlags::V);
         Ok(())
     }
 
     /// Unmap the page table.
     #[allow(dead_code)]
-    pub(crate) fn unmap(&mut self, frame_allocator: &mut BuddyAllocator) {
+    pub(crate) fn unmap(&mut self, frame_allocator: &BuddyAlloc) {
         for lvl2_pte in &mut self.0 {
             let lvl2_pte_flags = lvl2_pte.flags();
             if !lvl2_pte_flags.contains(PteFlags::V) || lvl2_pte_flags.is_rwx() {
@@ -114,20 +114,14 @@ impl PageTable {
     /// Performs identity map (vaddr == paddr) for addresses in the range [start, end].
     pub(crate) fn id_map_range(
         &mut self,
-        frame_allocator: &mut BuddyAllocator,
+        frame_allocator: &BuddyAlloc,
         start: PhysAddr,
         end: PhysAddr,
         flags: PteFlags,
     ) -> Result<(), Error> {
         let range = PpnRange::new(start.floor(), end.ceil()).unwrap();
         for ppn in range {
-            self.map(
-                frame_allocator,
-                VirtPageNumber::from(usize::from(ppn)),
-                ppn,
-                flags,
-                0,
-            )?;
+            self.map(frame_allocator, ppn.identity_map(), ppn, flags, 0)?;
         }
         Ok(())
     }
@@ -165,16 +159,16 @@ impl PteFlags {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PageTableEntry(usize);
 
-impl PageTableEntry {
-    fn new(ppn: PhysPageNumber, flags: PteFlags) -> Self {
-        Self(usize::from(ppn) << 10 | flags.bits())
+impl From<usize> for PageTableEntry {
+    fn from(pte: usize) -> Self {
+        Self(pte)
     }
+}
 
+impl PageTableEntry {
     fn translate(self, vpn: VirtPageNumber, lvl: usize) -> PhysPageNumber {
         let mask = (1 << (lvl * 9)) - 1;
-        let vpn = usize::from(vpn) & mask;
-        let ppn = usize::from(self.ppn()) & !mask;
-        PhysPageNumber::from(ppn | vpn)
+        self.ppn().blend(vpn.identity_map(), mask)
     }
 
     fn ppn(self) -> PhysPageNumber {

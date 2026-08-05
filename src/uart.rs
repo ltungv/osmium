@@ -6,69 +6,46 @@ use core::{
     ptr::NonNull,
 };
 
-/// Print to an UART port.
-#[macro_export]
-macro_rules! print {
-    ($($args:tt)*) => {{
-        use core::fmt::Write;
-        let mut driver = $crate::uart::driver();
-        let _ = write!(driver, $($args)+);
-    }};
-}
-
-/// Print to an UART port, with a newline.
-#[macro_export]
-macro_rules! println {
-    () => (print!("\r\n"));
-    ($($arg:tt)*) => (print!("{}\r\n", format_args!($($arg)*)));
-}
-
 /// Default UART base address on the `virt` machine in QEMU.
 pub const BASE_ADDRESS: usize = 0x1000_0000;
 
-static UART16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
+static CONSOLE: spin::Once<Console> = spin::Once::new();
 
 /// Initialize the global UART driver state.
-pub fn initialize() {
-    UART16550.call_once(|| {
-        let mut driver = unsafe {
+pub fn init() {
+    CONSOLE.call_once(|| {
+        let mut uart = unsafe {
             let base = NonNull::new_unchecked(BASE_ADDRESS as *mut u8);
-            Uart16550::new(base, 1).expect("16550 UART device address is valid")
+            Uart16550::new(base, 1).expect(
+                "`BASE_ADDRESS` points to the memory mapped I/O address of a working 16550 UART device",
+            )
         };
-        driver.initialize();
-        spin::Mutex::new(driver)
+        uart.initialize();
+        Console::new(uart)
     });
 }
 
 /// Acquire unique access to the global UART driver.
-pub fn driver() -> spin::MutexGuard<'static, Uart16550, spin::Spin> {
-    UART16550
+pub fn console() -> &'static Console {
+    CONSOLE
         .get()
-        .expect("16550 UART device driver is initialized")
-        .lock()
+        .expect("kernel's console has been initialized")
 }
 
-#[derive(Debug)]
-pub enum InvalidAddressError {
-    /// The given base pointer is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
-    /// consecutive addresses.
-    InvalidBase(NonNull<u8>),
-
-    /// The given stride is invalid. A stride must be non-zero and a power of two.
-    InvalidStride(u8),
+pub struct Console {
+    uart: spin::Mutex<Uart16550>,
 }
 
-impl fmt::Display for InvalidAddressError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::InvalidBase(base) => {
-                write!(f, "{base:p} is not a valid 16550 UART device base address")
-            }
-            Self::InvalidStride(stride) => write!(
-                f,
-                "stride must be non-zero and a power of two; got {stride}"
-            ),
+impl Console {
+    const fn new(uart: Uart16550) -> Self {
+        Self {
+            uart: spin::Mutex::new(uart),
         }
+    }
+
+    pub fn lock_with<F: FnOnce(&mut Uart16550)>(&self, output: F) {
+        let mut uart = self.uart.lock();
+        output(&mut uart);
     }
 }
 
@@ -129,7 +106,7 @@ impl Uart16550 {
     /// Number of registers of the device.
     const NUM_REGISTERS: usize = 8;
 
-    pub unsafe fn new(base: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
+    unsafe fn new(base: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
         if !stride.is_power_of_two() {
             return Err(InvalidAddressError::InvalidStride(stride));
         }
@@ -146,8 +123,8 @@ impl Uart16550 {
     }
 
     /// Put a byte into the transmitter holding register (thr) blocking until the byte is ready to be sent.
-    pub(crate) fn put(&mut self, byte: u8) -> bool {
-        if self.rd_reg(Self::LSR) & (1 << 6) == 0 {
+    fn put(&mut self, byte: u8) -> bool {
+        if self.rd_reg(Self::LSR) & (1 << 5) == 0 {
             false
         } else {
             self.wr_reg(Self::THR, byte);
@@ -156,7 +133,7 @@ impl Uart16550 {
     }
 
     /// Get the next available byte from the receiver buffer register (rbr).
-    pub(crate) fn get(&mut self) -> Option<u8> {
+    fn get(&mut self) -> Option<u8> {
         if self.rd_reg(Self::LSR) & (1 << 0) == 0 {
             None
         } else {
@@ -233,5 +210,48 @@ impl Write for Uart16550 {
             }
         });
         Ok(())
+    }
+}
+
+/// Print to an UART port.
+#[macro_export]
+macro_rules! print {
+    ($($args:tt)*) => {{
+        use core::fmt::Write;
+        let console = $crate::uart::console();
+        console.lock_with(|uart| {
+            let _ = write!(uart, $($args)+);
+        });
+    }};
+}
+
+/// Print to an UART port, with a newline.
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\r\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
+}
+
+#[derive(Debug)]
+enum InvalidAddressError {
+    /// The given base pointer is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
+    /// consecutive addresses.
+    InvalidBase(NonNull<u8>),
+
+    /// The given stride is invalid. A stride must be non-zero and a power of two.
+    InvalidStride(u8),
+}
+
+impl fmt::Display for InvalidAddressError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidBase(base) => {
+                write!(f, "{base:p} is not a valid 16550 UART device base address")
+            }
+            Self::InvalidStride(stride) => write!(
+                f,
+                "stride must be non-zero and a power of two; got {stride}"
+            ),
+        }
     }
 }

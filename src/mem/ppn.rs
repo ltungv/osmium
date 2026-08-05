@@ -1,6 +1,13 @@
 use core::{fmt, ops, slice};
 
-use crate::{PAGE_ORDER, PAGE_SIZE, addr::PhysAddr, mem::page::PageTable};
+use crate::{
+    PAGE_SIZE,
+    addr::PhysAddr,
+    mem::{
+        page::{PageTable, PageTableEntry, PteFlags},
+        vpn::VirtPageNumber,
+    },
+};
 
 const PPN_BITS: usize = 44;
 
@@ -8,6 +15,24 @@ const PPN_BITS: usize = 44;
 pub struct PhysPageNumber(usize);
 
 impl PhysPageNumber {
+    pub const fn satp(self) -> usize {
+        8 << 60 | self.0
+    }
+
+    pub fn blend(self, lower: Self, mask: usize) -> Self {
+        let lower = lower.0 & mask;
+        let upper = self.0 & !mask;
+        Self::from(upper | lower)
+    }
+
+    pub fn identity_map(self) -> VirtPageNumber {
+        VirtPageNumber::from(self.0)
+    }
+
+    pub fn as_pte(self, flags: PteFlags) -> PageTableEntry {
+        PageTableEntry::from(self.0 << 10 | flags.bits())
+    }
+
     pub fn as_slice<T>(self) -> &'static [T] {
         unsafe {
             slice::from_raw_parts(
@@ -43,9 +68,17 @@ impl ops::Add<usize> for PhysPageNumber {
     }
 }
 
-impl From<PhysPageNumber> for usize {
+impl ops::Sub<Self> for PhysPageNumber {
+    type Output = usize;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.0 - rhs.0
+    }
+}
+
+impl From<PhysPageNumber> for PhysAddr {
     fn from(ppn: PhysPageNumber) -> Self {
-        ppn.0
+        Self::from(ppn.0 << 12)
     }
 }
 
@@ -55,11 +88,6 @@ impl From<usize> for PhysPageNumber {
     }
 }
 
-impl From<PhysAddr> for PhysPageNumber {
-    fn from(addr: PhysAddr) -> Self {
-        Self(usize::from(addr) >> PAGE_ORDER)
-    }
-}
 impl fmt::Debug for PhysPageNumber {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ppn@{:x}", self.0)
@@ -79,7 +107,7 @@ impl PpnRange {
         }
         Some(Self {
             ppn: start,
-            len: usize::from(end) - usize::from(start),
+            len: end - start,
         })
     }
 }

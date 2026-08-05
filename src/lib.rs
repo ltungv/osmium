@@ -8,7 +8,7 @@
     clippy::nursery,
     clippy::pedantic,
     missing_debug_implementations,
-    // missing_docs,
+    missing_docs,
     rust_2018_idioms,
     rust_2021_compatibility,
     rust_2024_compatibility,
@@ -83,9 +83,11 @@ unsafe extern "C" {
 
 const NPAGES: usize = 16;
 
+/// Kernel initialization routine. The bootloader (`boot.S`) jumps to this function after setting up
+/// the device in machine mode in `_start`.
 #[unsafe(no_mangle)]
 pub extern "C" fn kinit() -> usize {
-    uart::initialize();
+    uart::init();
     mem::initialize_frame_allocator();
     mem::initialize_kheap_allocator();
     println!("{:?}\n", frame_allocator());
@@ -125,6 +127,7 @@ pub extern "C" fn kinit() -> usize {
     kheap_allocator().satp()
 }
 
+/// Kernel main runtime.
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain() {
     println!("hello, world!");
@@ -161,6 +164,7 @@ pub extern "C" fn kmain() {
     }
 }
 
+/// Context of the frame causing the trap.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct TrapFrame {
@@ -272,6 +276,12 @@ pub extern "C" fn mtrap(
     program_counter
 }
 
+/// The lang item `eh_personality` is a function used by the failure mechanisms of the compiler.
+///
+/// This is often mapped to GCC’s personality function (see the std implementation for more
+/// information), but programs which don’t trigger a panic can be assured that this function is
+/// never called. Additionally, a `eh_catch_typeinfo` static is needed for certain targets which
+/// implement Rust panics on top of C++ exceptions.
 #[unsafe(no_mangle)]
 pub const extern "C" fn eh_personality() {}
 
