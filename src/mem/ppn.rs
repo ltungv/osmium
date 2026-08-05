@@ -1,6 +1,6 @@
 use core::{fmt, ops, slice};
 
-use crate::{PAGE_ORDER, PAGE_SIZE, addr::PhysAddr};
+use crate::{PAGE_ORDER, PAGE_SIZE, addr::PhysAddr, mem::page::PageTable};
 
 const PPN_BITS: usize = 44;
 
@@ -25,13 +25,13 @@ impl PhysPageNumber {
             )
         }
     }
-}
 
-impl ops::BitXor<usize> for PhysPageNumber {
-    type Output = Self;
+    pub fn as_page_table(self) -> &'static PageTable {
+        unsafe { &*PhysAddr::from(self).as_ptr::<PageTable>() }
+    }
 
-    fn bitxor(self, rhs: usize) -> Self::Output {
-        Self(self.0 ^ rhs)
+    pub fn as_page_table_mut(self) -> &'static mut PageTable {
+        unsafe { &mut *PhysAddr::from(self).as_ptr_mut::<PageTable>() }
     }
 }
 
@@ -67,7 +67,7 @@ impl fmt::Debug for PhysPageNumber {
 }
 
 #[derive(Debug)]
-pub(crate) struct PpnRange {
+pub struct PpnRange {
     ppn: PhysPageNumber,
     len: usize,
 }
@@ -97,7 +97,7 @@ impl IntoIterator for PpnRange {
     }
 }
 
-pub(crate) struct PpnRangeIter {
+pub struct PpnRangeIter {
     ppn: PhysPageNumber,
     len: usize,
 }

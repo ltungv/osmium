@@ -1,4 +1,4 @@
-use core::{fmt, ops, usize};
+use core::{fmt, ops};
 
 use crate::{PAGE_SIZE, mem::ppn::PhysPageNumber};
 
@@ -34,7 +34,7 @@ impl PhysAddr {
     /// It's safe to cast a physical address into a raw pointer under two scenarios:
     /// * The memory management unit is disabled.
     /// * The memory management unit is enabled and the physical address has been identity mapped.
-    pub(crate) unsafe fn as_ptr<T>(self) -> *const T {
+    pub(crate) const unsafe fn as_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
@@ -49,7 +49,7 @@ impl PhysAddr {
     /// It's safe to cast a physical address into a raw pointer under two scenarios:
     /// * The memory management unit is disabled.
     /// * The memory management unit is enabled and the physical address has been identity mapped.
-    pub(crate) unsafe fn as_ptr_mut<T>(self) -> *mut T {
+    pub(crate) const unsafe fn as_ptr_mut<T>(self) -> *mut T {
         self.0 as *mut T
     }
 }
@@ -92,7 +92,7 @@ pub struct VirtAddr(usize);
 impl VirtAddr {
     /// Returns the offset of the virtual address, corresponding to the first `PAGE_SIZE_BITS` bits
     /// of the virtual address.
-    pub(crate) fn offset(self) -> usize {
+    pub(crate) const fn offset(self) -> usize {
         self.0 & (PAGE_SIZE - 1)
     }
 }
