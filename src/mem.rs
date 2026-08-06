@@ -9,16 +9,16 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{HEAP_SIZE, HEAP_START, mem::buddy::BuddyAlloc};
 
-static FRAME_ALLOCATOR: spin::Once<BuddyAlloc> = spin::Once::new();
+static BUDDY_ALLOC: spin::Once<BuddyAlloc> = spin::Once::new();
 
-static KHEAP_ALLOCATOR: spin::Once<spin::Mutex<heap::Allocator>> = spin::Once::new();
+static KHEAP: spin::Once<spin::Mutex<heap::Heap>> = spin::Once::new();
 
 #[global_allocator]
 static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator;
 
 /// Initialize the global frame allocator.
 pub fn initialize_frame_allocator() {
-    FRAME_ALLOCATOR.call_once(|| unsafe {
+    BUDDY_ALLOC.call_once(|| unsafe {
         buddy::BuddyAlloc::new(HEAP_START.into(), HEAP_SIZE)
             .expect("`HEAP_START` and `HEAP_SIZE` represents a valid memory region")
     });
@@ -26,8 +26,8 @@ pub fn initialize_frame_allocator() {
 
 /// Initialize the kernel heap allocator.
 pub fn initialize_kheap_allocator() {
-    KHEAP_ALLOCATOR.call_once(|| {
-        let allocator = heap::Allocator::new(frame_allocator())
+    KHEAP.call_once(|| {
+        let allocator = heap::Heap::new(buddy())
             .expect("device has enough memory to accomodate the kernel's heep");
 
         allocator
@@ -39,16 +39,16 @@ pub fn initialize_kheap_allocator() {
 }
 
 /// Get a reference to the frame allocator.
-pub fn frame_allocator() -> &'static BuddyAlloc {
-    FRAME_ALLOCATOR
+pub fn buddy() -> &'static BuddyAlloc {
+    BUDDY_ALLOC
         .get()
         .expect("kernel's frame allocator has been initialized")
 }
 
 // TODO: Expose `alloc/dealloc` so user can't take a `MutexGuard` and accidentally deadlock.
 /// Get a reference to the kernel heap allocator.
-pub fn kheap_allocator() -> spin::MutexGuard<'static, heap::Allocator, spin::Spin> {
-    KHEAP_ALLOCATOR
+pub fn kheap() -> spin::MutexGuard<'static, heap::Heap, spin::Spin> {
+    KHEAP
         .get()
         .expect("kernel's heap allocator has been initialized")
         .lock()
@@ -61,13 +61,13 @@ struct GlobalAllocator;
 
 unsafe impl GlobalAlloc for GlobalAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        kheap_allocator()
+        kheap()
             .zalloc(layout.size())
             .unwrap_or(core::ptr::null_mut())
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-        kheap_allocator().dealloc(ptr);
+        kheap().dealloc(ptr);
     }
 }
 

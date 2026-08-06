@@ -7,8 +7,8 @@ use crate::{
     KERNEL_STACK_START, PAGE_SIZE, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
     addr::{PhysAddr, VirtAddr},
     mem::{
+        buddy,
         buddy::BuddyAlloc,
-        frame_allocator,
         page::{self, PteFlags},
         ppn::PhysPageNumber,
     },
@@ -19,18 +19,18 @@ use crate::{
 pub const PAGE_COUNT: usize = 64;
 
 /// Metadata for the kernel's memory.
-pub struct Allocator {
+pub struct Heap {
     alloc_list: AllocationList,
     root_ppn: PhysPageNumber,
 }
 
-impl fmt::Debug for Allocator {
+impl fmt::Debug for Heap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.alloc_list.fmt(f)
     }
 }
 
-impl Allocator {
+impl Heap {
     /// Initialize the kernel's memory.
     pub fn new(frame_allocator: &BuddyAlloc) -> Option<Self> {
         let root_ppn = frame_allocator.zalloc(0)?;
@@ -158,64 +158,63 @@ impl Allocator {
     pub fn identity_map(&self) -> Result<(), page::Error> {
         let root_table = self.root_ppn.as_page_table_mut();
 
-        root_table.map(
-            frame_allocator(),
-            VirtAddr::from(uart::BASE_ADDRESS).into(),
-            PhysAddr::from(uart::BASE_ADDRESS).into(),
+        root_table.id_map_range(
+            PhysAddr::from(uart::BASE_ADDRESS),
+            PhysAddr::from(uart::BASE_ADDRESS) + 256,
             PteFlags::R | PteFlags::W,
-            0,
+            buddy(),
         )?;
 
         root_table.id_map_range(
-            frame_allocator(),
             self.alloc_list.head_addr(),
             self.alloc_list.tail_addr(),
             PteFlags::R | PteFlags::W,
+            buddy(),
         )?;
 
         // SAFETY: the linker-script symbols below are valid addresses
         // provided by the linker and represent the kernel's memory layout.
         unsafe {
             root_table.id_map_range(
-                frame_allocator(),
                 PhysAddr::from(HEAP_START),
                 PhysAddr::from(HEAP_START) + HEAP_SIZE,
                 PteFlags::R | PteFlags::W,
+                buddy(),
             )?;
 
             root_table.id_map_range(
-                frame_allocator(),
                 PhysAddr::from(TEXT_START),
                 PhysAddr::from(TEXT_END),
                 PteFlags::R | PteFlags::X,
+                buddy(),
             )?;
 
             root_table.id_map_range(
-                frame_allocator(),
                 PhysAddr::from(RODATA_START),
                 PhysAddr::from(RODATA_END),
                 PteFlags::R | PteFlags::X,
+                buddy(),
             )?;
 
             root_table.id_map_range(
-                frame_allocator(),
                 PhysAddr::from(DATA_START),
                 PhysAddr::from(DATA_END),
                 PteFlags::R | PteFlags::W,
+                buddy(),
             )?;
 
             root_table.id_map_range(
-                frame_allocator(),
                 PhysAddr::from(BSS_START),
                 PhysAddr::from(BSS_END),
                 PteFlags::R | PteFlags::W,
+                buddy(),
             )?;
 
             root_table.id_map_range(
-                frame_allocator(),
                 PhysAddr::from(KERNEL_STACK_START),
                 PhysAddr::from(KERNEL_STACK_END),
                 PteFlags::R | PteFlags::W,
+                buddy(),
             )?;
         }
         Ok(())
