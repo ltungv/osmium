@@ -6,7 +6,7 @@ use core::{
     ptr::NonNull,
 };
 
-/// Default UART base address on the `virt` machine in QEMU.
+/// Default UART address on the `virt` machine in QEMU.
 pub const BASE_ADDRESS: usize = 0x1000_0000;
 
 static CONSOLE: spin::Once<Console> = spin::Once::new();
@@ -15,8 +15,8 @@ static CONSOLE: spin::Once<Console> = spin::Once::new();
 pub fn init() {
     CONSOLE.call_once(|| {
         let mut uart = unsafe {
-            let base = NonNull::new_unchecked(BASE_ADDRESS as *mut u8);
-            Uart16550::new(base, 1).expect(
+            let addr = NonNull::new_unchecked(BASE_ADDRESS as *mut u8);
+            Uart16550::new(addr, 1).expect(
                 "`BASE_ADDRESS` points to the memory mapped I/O address of a working 16550 UART device",
             )
         };
@@ -51,12 +51,12 @@ impl Console {
 
 /// A driver for 16550 UART devices backed by memory-mapped I/O addresses.
 pub struct Uart16550 {
-    base: NonNull<u8>,
+    addr: NonNull<u8>,
     stride: NonZeroU8,
 }
 
 // SAFETY: `Uart16550` is not `Sync`, so concurrent access from multiple thread is not possible
-// without additional synchronizations. The base pointer is ensured to points to a physical memory
+// without additional synchronizations. The device address is ensured to points to a physical memory
 // region large enough to accomodate `NUM_REGISTERS` addresses, and access to the region is given
 // exclusively to the driver instance. All operations take a `&mut self` which ensures the driver is
 // only accessed by at most one thread at a time.
@@ -106,20 +106,20 @@ impl Uart16550 {
     /// Number of registers of the device.
     const NUM_REGISTERS: usize = 8;
 
-    unsafe fn new(base: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
+    unsafe fn new(addr: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
         if !stride.is_power_of_two() {
             return Err(InvalidAddressError::InvalidStride(stride));
         }
         let Some(stride) = NonZeroU8::new(stride) else {
             return Err(InvalidAddressError::InvalidStride(stride));
         };
-        if (base.as_ptr() as usize)
+        if (addr.as_ptr() as usize)
             .checked_add((Self::NUM_REGISTERS - 1) * stride.get() as usize)
             .is_none()
         {
-            return Err(InvalidAddressError::InvalidBase(base));
+            return Err(InvalidAddressError::InvalidAddr(addr));
         }
-        Ok(Self { base, stride })
+        Ok(Self { addr, stride })
     }
 
     /// Put a byte into the transmitter holding register (thr) blocking until the byte is ready to be sent.
@@ -144,7 +144,7 @@ impl Uart16550 {
     /// Read a byte from a register offset
     fn rd_reg(&mut self, offset: usize) -> u8 {
         unsafe {
-            self.base
+            self.addr
                 .add(offset * self.stride.get() as usize)
                 .read_volatile()
         }
@@ -153,7 +153,7 @@ impl Uart16550 {
     /// Write a byte to a register offset
     fn wr_reg(&mut self, offset: usize, value: u8) {
         unsafe {
-            self.base
+            self.addr
                 .add(offset * self.stride.get() as usize)
                 .write_volatile(value);
         }
@@ -234,9 +234,9 @@ macro_rules! println {
 
 #[derive(Debug)]
 enum InvalidAddressError {
-    /// The given base pointer is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
+    /// The given address is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
     /// consecutive addresses.
-    InvalidBase(NonNull<u8>),
+    InvalidAddr(NonNull<u8>),
 
     /// The given stride is invalid. A stride must be non-zero and a power of two.
     InvalidStride(u8),
@@ -245,8 +245,8 @@ enum InvalidAddressError {
 impl fmt::Display for InvalidAddressError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::InvalidBase(base) => {
-                write!(f, "{base:p} is not a valid 16550 UART device base address")
+            Self::InvalidAddr(addr) => {
+                write!(f, "{addr:p} is not a valid 16550 UART device address")
             }
             Self::InvalidStride(stride) => write!(
                 f,

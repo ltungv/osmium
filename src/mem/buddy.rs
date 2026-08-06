@@ -5,7 +5,7 @@ use crate::{PAGE_SIZE, addr::PhysAddr, mem::ppn::PhysPageNumber};
 const MAX_ORDER: usize = 12;
 
 pub struct BuddyAlloc {
-    ppn: PhysPageNumber,
+    addr: PhysPageNumber,
     state: spin::Mutex<State>,
 }
 
@@ -16,8 +16,8 @@ impl fmt::Debug for BuddyAlloc {
         writeln!(
             f,
             "frames: {:?} -> {:?} ({} frames, {} KB)",
-            self.ppn,
-            self.ppn + state.headers.len(),
+            self.addr,
+            self.addr + state.headers.len(),
             state.headers.len(),
             PAGE_SIZE * state.headers.len() / 1024,
         )?;
@@ -25,10 +25,10 @@ impl fmt::Debug for BuddyAlloc {
         let mut total_free_frames = 0;
         for order in (0..=MAX_ORDER).rev() {
             let mut free_blocks = 0;
-            let mut next = state.free[order].head;
+            let mut next = state.free_list[order].next;
             while let Some(curr) = next {
                 free_blocks += 1;
-                next = state.headers[curr].next;
+                next = state.headers[curr].link.next;
             }
             let free_frames = free_blocks * (1 << order);
             total_free_frames += free_frames;
@@ -52,13 +52,13 @@ impl BuddyAlloc {
         let aligned_addr = addr.align(align_of::<Header>());
         let state = unsafe { State::new(aligned_addr, addr + len) };
         state.map(|s| Self {
-            ppn: (aligned_addr + core::mem::size_of_val(s.headers)).ceil(),
+            addr: (aligned_addr + core::mem::size_of_val(s.headers)).ceil(),
             state: spin::Mutex::new(s),
         })
     }
 
     pub fn alloc(&self, order: usize) -> Option<PhysPageNumber> {
-        self.state.lock().alloc(order).map(|idx| self.ppn + idx)
+        self.state.lock().alloc(order).map(|idx| self.addr + idx)
     }
 
     pub fn zalloc(&self, order: usize) -> Option<PhysPageNumber> {
@@ -71,14 +71,14 @@ impl BuddyAlloc {
     }
 
     pub fn dealloc(&self, ppn: PhysPageNumber) {
-        assert!(ppn >= self.ppn);
-        let idx = ppn - self.ppn;
+        assert!(ppn >= self.addr);
+        let idx = ppn - self.addr;
         self.state.lock().dealloc(idx);
     }
 }
 
 struct State {
-    free: [FreeList; MAX_ORDER + 1],
+    free_list: [Link; MAX_ORDER + 1],
     headers: &'static mut [Header],
 }
 
@@ -97,7 +97,7 @@ impl State {
             }
         }
         let mut allocator = Self {
-            free: [const { FreeList::new() }; MAX_ORDER + 1],
+            free_list: [const { Link::new() }; MAX_ORDER + 1],
             headers: unsafe { slice::from_raw_parts_mut(headers_ptr, unprovisioned_frames) },
         };
         let mut frame_idx = 0;
@@ -153,48 +153,49 @@ impl State {
     }
 
     fn pop_free(&mut self, order: usize) -> Option<usize> {
-        let list = &mut self.free[order];
-        list.head.take().inspect(|&head| {
-            list.head = self.headers[head].next.take();
+        let link = &mut self.free_list[order];
+        link.next.take().inspect(|&idx| {
+            link.next = self.headers[idx].link.next.take();
         })
     }
 
     fn push_free(&mut self, order: usize, idx: usize) {
-        let list = &mut self.free[order];
-        self.headers[idx].next = list.head.replace(idx);
+        let link = &mut self.free_list[order];
+        self.headers[idx].link.next = link.next.replace(idx);
     }
 
     fn remove_free(&mut self, order: usize, idx: usize) {
         let mut prev: Option<usize> = None;
-        let mut next = self.free[order].head;
+        let mut next = self.free_list[order].next;
         while let Some(curr_idx) = next {
             if curr_idx == idx {
                 if let Some(prev_idx) = prev {
-                    self.headers[prev_idx].next = self.headers[curr_idx].next.take();
+                    self.headers[prev_idx].link.next = self.headers[curr_idx].link.next.take();
                 } else {
-                    self.free[order].head = self.headers[curr_idx].next.take();
+                    self.free_list[order].next = self.headers[curr_idx].link.next.take();
                 }
                 break;
             }
             prev = Some(curr_idx);
-            next = self.headers[curr_idx].next;
+            next = self.headers[curr_idx].link.next;
         }
     }
 }
 
 #[derive(Default)]
 struct Header {
-    next: Option<usize>,
+    link: Link,
     order: u8,
     taken: bool,
 }
 
-struct FreeList {
-    head: Option<usize>,
+#[derive(Default)]
+struct Link {
+    next: Option<usize>,
 }
 
-impl FreeList {
+impl Link {
     const fn new() -> Self {
-        Self { head: None }
+        Self { next: None }
     }
 }

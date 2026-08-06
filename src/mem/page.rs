@@ -28,6 +28,8 @@ impl fmt::Display for Error {
     }
 }
 
+struct PageMapper {}
+
 #[derive(Debug)]
 #[repr(C, align(4096))]
 pub struct PageTable([PageTableEntry; 4096]);
@@ -36,18 +38,18 @@ impl PageTable {
     /// Create a mapping between the given virtual address and physical address.
     pub fn map(
         &mut self,
-        frame_allocator: &BuddyAlloc,
         vpn: VirtPageNumber,
         ppn: PhysPageNumber,
         flags: PteFlags,
         lvl: usize,
+        allocator: &BuddyAlloc,
     ) -> Result<(), Error> {
         assert!(flags.is_rwx());
         let indices = vpn.indices();
         let mut pte = &mut self.0[indices[2]];
         for &index_next in indices[lvl..2].iter().rev() {
             if !pte.flags().contains(PteFlags::V) {
-                let inner_ppn = frame_allocator.zalloc(0).ok_or(Error::OutOfMemory)?;
+                let inner_ppn = allocator.zalloc(0).ok_or(Error::OutOfMemory)?;
                 *pte = inner_ppn.as_pte(PteFlags::V);
             }
             pte = &mut pte.ppn().as_slice_mut::<PageTableEntry>()[index_next];
@@ -58,7 +60,7 @@ impl PageTable {
 
     /// Unmap the page table.
     #[allow(dead_code)]
-    pub(crate) fn unmap(&mut self, frame_allocator: &BuddyAlloc) {
+    pub(crate) fn unmap(&mut self, allocator: &BuddyAlloc) {
         for lvl2_pte in &mut self.0 {
             let lvl2_pte_flags = lvl2_pte.flags();
             if !lvl2_pte_flags.contains(PteFlags::V) || lvl2_pte_flags.is_rwx() {
@@ -72,10 +74,10 @@ impl PageTable {
                 }
                 let lvl0_ppn = lvl1_pte.ppn();
                 *lvl1_pte = PageTableEntry::default();
-                frame_allocator.dealloc(lvl0_ppn);
+                allocator.dealloc(lvl0_ppn);
             }
             *lvl2_pte = PageTableEntry::default();
-            frame_allocator.dealloc(lvl1_ppn);
+            allocator.dealloc(lvl1_ppn);
         }
     }
 
@@ -114,14 +116,14 @@ impl PageTable {
     /// Performs identity map (vaddr == paddr) for addresses in the range [start, end].
     pub(crate) fn id_map_range(
         &mut self,
-        frame_allocator: &BuddyAlloc,
         start: PhysAddr,
         end: PhysAddr,
         flags: PteFlags,
+        allocator: &BuddyAlloc,
     ) -> Result<(), Error> {
         let range = PpnRange::new(start.floor(), end.ceil()).unwrap();
         for ppn in range {
-            self.map(frame_allocator, ppn.identity_map(), ppn, flags, 0)?;
+            self.map(ppn.identity_map(), ppn, flags, 0, allocator)?;
         }
         Ok(())
     }
