@@ -24,11 +24,11 @@ mod uart;
 use core::{arch::asm, ptr::NonNull};
 
 use alloc::vec::Vec;
-use mem::frame_allocator;
+use mem::buddy;
 
 use crate::{
     addr::VirtAddr,
-    mem::{kheap_allocator, ppn::PhysPageNumber},
+    mem::{kheap, ppn::PhysPageNumber},
 };
 
 /// The size of a page in bytes.
@@ -90,41 +90,41 @@ pub extern "C" fn kinit() -> usize {
     uart::init();
     mem::initialize_frame_allocator();
     mem::initialize_kheap_allocator();
-    println!("{:?}\n", frame_allocator());
+    println!("{:?}\n", buddy());
 
     println!("---------------------------------------------");
-    println!("{:?}\n", frame_allocator());
+    println!("{:?}\n", buddy());
     println!("---------------------------------------------");
 
     let mut ppns: [Option<PhysPageNumber>; NPAGES] = [None; NPAGES];
     for (order, page) in ppns.iter_mut().take(12).enumerate().rev() {
-        let ppn = frame_allocator().alloc(order);
+        let ppn = buddy().alloc(order);
         *page = ppn;
         println!("alloc {ppn:?}");
     }
 
     println!("---------------------------------------------");
-    println!("{:?}\n", frame_allocator());
+    println!("{:?}\n", buddy());
     println!("---------------------------------------------");
 
     for &ppn in ppns.iter().flatten() {
-        frame_allocator().dealloc(ppn);
+        buddy().dealloc(ppn);
         println!("dealloc {ppn:?}");
     }
 
     println!("---------------------------------------------");
-    println!("{:?}\n", frame_allocator());
+    println!("{:?}\n", buddy());
     println!("---------------------------------------------");
 
     let p = unsafe { VirtAddr::from(HEAP_START) };
-    let m = kheap_allocator().translate(p).unwrap_or_else(|| 0.into());
+    let m = kheap().translate(p).unwrap_or_else(|| 0.into());
     println!("Walk {:?} = {:?}", p, m);
 
     let p = VirtAddr::from(uart::BASE_ADDRESS);
-    let m = kheap_allocator().translate(p).unwrap_or_else(|| 0.into());
+    let m = kheap().translate(p).unwrap_or_else(|| 0.into());
     println!("Walk {:?} = {:?}", p, m);
 
-    kheap_allocator().satp()
+    kheap().satp()
 }
 
 /// Kernel main runtime.
@@ -135,13 +135,13 @@ pub extern "C" fn kmain() {
         let v1: Vec<u8> = Vec::with_capacity(8);
         let v2: Vec<u8> = Vec::with_capacity(8);
         let v3: Vec<u8> = Vec::with_capacity(8);
-        println!("{:?}", kheap_allocator());
+        println!("{:?}", kheap());
 
         drop(v2);
-        println!("{:?}", kheap_allocator());
+        println!("{:?}", kheap());
 
         let v4: Vec<u8> = Vec::with_capacity(64);
-        println!("{:?}", kheap_allocator());
+        println!("{:?}", kheap());
 
         drop(v1);
         drop(v3);
