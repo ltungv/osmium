@@ -159,8 +159,8 @@ impl Heap {
         let root_table = self.root_ppn.as_page_table_mut();
 
         root_table.id_map_range(
-            PhysAddr::from(uart::BASE_ADDRESS),
-            PhysAddr::from(uart::BASE_ADDRESS) + 256,
+            PhysAddr::from(uart::QEMU_ADDR),
+            PhysAddr::from(uart::QEMU_ADDR) + 256,
             PteFlags::R | PteFlags::W,
             buddy(),
         )?;

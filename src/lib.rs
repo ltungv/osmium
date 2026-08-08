@@ -120,7 +120,7 @@ pub extern "C" fn kinit() -> usize {
     let m = kheap().translate(p).unwrap_or_else(|| 0.into());
     println!("Walk {:?} = {:?}", p, m);
 
-    let p = VirtAddr::from(uart::BASE_ADDRESS);
+    let p = VirtAddr::from(uart::QEMU_ADDR);
     let m = kheap().translate(p).unwrap_or_else(|| 0.into());
     println!("Walk {:?} = {:?}", p, m);
 
