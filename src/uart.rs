@@ -1,4 +1,4 @@
-//! A driver for 16550 UART devices, typically known and used as serial ports or COM ports.
+//! A console for sending and receiving bytes to and from 16550 UART devices.
 
 use core::{
     fmt::{self, Write},
@@ -6,32 +6,33 @@ use core::{
     ptr::NonNull,
 };
 
-/// Default UART address on the `virt` machine in QEMU.
-pub const BASE_ADDRESS: usize = 0x1000_0000;
+/// Address of the UART device on the `virt` machine in `QEMU`.
+pub const QEMU_ADDR: usize = 0x1000_0000;
 
 static CONSOLE: spin::Once<Console> = spin::Once::new();
 
-/// Initialize the global UART driver state.
+/// Initialize the global console connecting to the default address of the UART device on the `virt`
+/// machine in `QEMU`.
 pub fn init() {
     CONSOLE.call_once(|| {
         let mut uart = unsafe {
-            let addr = NonNull::new_unchecked(BASE_ADDRESS as *mut u8);
-            Uart16550::new(addr, 1).expect(
-                "`BASE_ADDRESS` points to the memory mapped I/O address of a working 16550 UART device",
-            )
+            let addr = NonNull::new_unchecked(QEMU_ADDR as *mut u8);
+            Uart16550::new(addr, 1).expect("16550 UART driver should be created")
         };
-        uart.initialize();
+        uart.init();
         Console::new(uart)
     });
 }
 
-/// Acquire unique access to the global UART driver.
+/// Get a reference to the global console connected to the default address of the UART device on
+/// the `virt` machine in `QEMU`.
 pub fn console() -> &'static Console {
     CONSOLE
         .get()
         .expect("kernel's console has been initialized")
 }
 
+/// A console providing safe concurrently access to some 16550 UART device.
 pub struct Console {
     uart: spin::Mutex<Uart16550>,
 }
@@ -43,9 +44,9 @@ impl Console {
         }
     }
 
-    pub fn lock_with<F: FnOnce(&mut Uart16550)>(&self, output: F) {
-        let mut uart = self.uart.lock();
-        output(&mut uart);
+    /// Take exclusive access of the underlying 16550 UART driver and give it to the closure.
+    pub fn write_with<W: FnOnce(&mut Uart16550)>(&self, write: W) {
+        write(&mut self.uart.lock());
     }
 }
 
@@ -122,27 +123,29 @@ impl Uart16550 {
         Ok(Self { addr, stride })
     }
 
-    /// Put a byte into the transmitter holding register (thr) blocking until the byte is ready to be sent.
-    fn put(&mut self, byte: u8) -> bool {
-        if self.rd_reg(Self::LSR) & (1 << 5) == 0 {
+    /// Try to put a byte into the transmitter holding register, returning true if the byte has been
+    /// successfully acknowledged.
+    fn try_put(&mut self, byte: u8) -> bool {
+        if self.read_from(Self::LSR) & (1 << 5) == 0 {
             false
         } else {
-            self.wr_reg(Self::THR, byte);
+            self.write_to(Self::THR, byte);
             true
         }
     }
 
-    /// Get the next available byte from the receiver buffer register (rbr).
-    fn get(&mut self) -> Option<u8> {
-        if self.rd_reg(Self::LSR) & (1 << 0) == 0 {
+    /// Try to get a byte from the receiver holding register, returning `None` if no byte is ready
+    /// to be read.
+    fn try_get(&mut self) -> Option<u8> {
+        if self.read_from(Self::LSR) & (1 << 0) == 0 {
             None
         } else {
-            Some(self.rd_reg(Self::RHR))
+            Some(self.read_from(Self::RHR))
         }
     }
 
     /// Read a byte from a register offset
-    fn rd_reg(&mut self, offset: usize) -> u8 {
+    fn read_from(&mut self, offset: usize) -> u8 {
         unsafe {
             self.addr
                 .add(offset * self.stride.get() as usize)
@@ -151,7 +154,7 @@ impl Uart16550 {
     }
 
     /// Write a byte to a register offset
-    fn wr_reg(&mut self, offset: usize, value: u8) {
+    fn write_to(&mut self, offset: usize, value: u8) {
         unsafe {
             self.addr
                 .add(offset * self.stride.get() as usize)
@@ -159,10 +162,10 @@ impl Uart16550 {
         }
     }
 
-    /// Initialize the UART hardware registers.
-    fn initialize(&mut self) {
+    /// Initialize the UART device.
+    fn init(&mut self) {
         // Disable all interrupts during initialization.
-        self.wr_reg(Self::IER, 0);
+        self.write_to(Self::IER, 0);
 
         // Data word length: 8 bits.
         let lcr_value = 1 << 1 | 1 << 0;
@@ -178,34 +181,34 @@ impl Uart16550 {
         let divisor = 592u16;
         {
             // Enable DLAB to access the divisor latches (offsets 0 and 1 become DLL/DLM).
-            self.wr_reg(Self::LCR, lcr_value | 1 << 7);
+            self.write_to(Self::LCR, lcr_value | 1 << 7);
 
             // Set divisor least significant byte.
-            self.wr_reg(Self::DLL, (divisor & 0xff) as u8);
+            self.write_to(Self::DLL, (divisor & 0xff) as u8);
 
             // Set divisor most significant byte.
-            self.wr_reg(Self::DLM, (divisor >> 8) as u8);
+            self.write_to(Self::DLM, (divisor >> 8) as u8);
 
             // Disable DLAB and set data word length to 8 bits.
-            self.wr_reg(Self::LCR, lcr_value);
+            self.write_to(Self::LCR, lcr_value);
         }
 
         // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
-        self.wr_reg(Self::FCR, 1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
+        self.write_to(Self::FCR, 1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
 
         // Mark data terminal ready, and signal request to send.
-        self.wr_reg(Self::MCR, 1 << 1 | 1 << 0);
+        self.write_to(Self::MCR, 1 << 1 | 1 << 0);
 
         // Enable receiver buffer interrupts (must be after DLAB is disabled,
         // since offset 1 is shared between IER and DLM).
-        self.wr_reg(Self::IER, 1 << 0);
+        self.write_to(Self::IER, 1 << 0);
     }
 }
 
 impl Write for Uart16550 {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         s.bytes().for_each(|b| {
-            while !self.put(b) {
+            while !self.try_put(b) {
                 core::hint::spin_loop();
             }
         });
@@ -213,19 +216,19 @@ impl Write for Uart16550 {
     }
 }
 
-/// Print to an UART port.
+/// Print to the global console.
 #[macro_export]
 macro_rules! print {
     ($($args:tt)*) => {{
         use core::fmt::Write;
         let console = $crate::uart::console();
-        console.lock_with(|uart| {
+        console.write_with(|uart| {
             let _ = write!(uart, $($args)+);
         });
     }};
 }
 
-/// Print to an UART port, with a newline.
+/// Print to the global console, with a new line.
 #[macro_export]
 macro_rules! println {
     () => ($crate::print!("\r\n"));
