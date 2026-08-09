@@ -3,16 +3,9 @@
 use core::{fmt, marker::PhantomData, mem::size_of, ptr::NonNull};
 
 use crate::{
-    BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
-    KERNEL_STACK_START, PAGE_SIZE, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
-    addr::{PhysAddr, VirtAddr},
-    mem::{
-        buddy,
-        buddy::BuddyAlloc,
-        page::{self, PteFlags},
-        ppn::PhysPageNumber,
-    },
-    uart,
+    PAGE_SIZE,
+    addr::{PhysAddr, phys_to_virt},
+    mem::buddy::BuddyAlloc,
 };
 
 /// Number of pages used for the kernel heap allocator.
@@ -21,7 +14,6 @@ pub const PAGE_COUNT: usize = 64;
 /// Metadata for the kernel's memory.
 pub struct Heap {
     alloc_list: AllocationList,
-    root_ppn: PhysPageNumber,
 }
 
 impl fmt::Debug for Heap {
@@ -33,8 +25,7 @@ impl fmt::Debug for Heap {
 impl Heap {
     /// Initialize the kernel's memory.
     pub fn new(frame_allocator: &BuddyAlloc) -> Option<Self> {
-        let root_ppn = frame_allocator.zalloc(0)?;
-        let head_ppn = frame_allocator.zalloc(6)?;
+        let head_ppn = frame_allocator.alloc(6)?;
         let tail_ppn = head_ppn + PAGE_COUNT;
 
         // SAFETY: `head_ppn.addr()` is the start of a freshly zero-allocated
@@ -42,8 +33,8 @@ impl Heap {
         // address is valid because the region is large enough and the address
         // is 4096-byte aligned (satisfies `AllocationNode`'s `usize` alignment).
         let mut head =
-            unsafe { NodePtr::from_raw(PhysAddr::from(head_ppn).as_ptr_mut::<AllocNode>()) };
-        let tail = unsafe { PhysAddr::from(tail_ppn).as_ptr::<u8>() };
+            unsafe { NodePtr::from_raw(phys_to_virt(head_ppn.addr()).as_ptr_mut::<AllocNode>()) };
+        let tail = unsafe { phys_to_virt(tail_ppn.addr()).as_ptr::<u8>() };
 
         {
             let node = head.as_mut();
@@ -53,15 +44,17 @@ impl Heap {
         }
 
         let alloc_list = AllocationList { head, tail };
-        Some(Self {
-            alloc_list,
-            root_ppn,
-        })
+        Some(Self { alloc_list })
     }
 
-    /// Returns the identification of the root frame of the kernel.
-    pub const fn satp(&self) -> usize {
-        self.root_ppn.satp()
+    /// Get the memory address of the list head.
+    pub fn start(&self) -> PhysAddr {
+        PhysAddr::new_trunc(self.alloc_list.head.as_raw() as usize)
+    }
+
+    /// Get the memory address of the list tail.
+    pub fn end(&self) -> PhysAddr {
+        PhysAddr::new_trunc(self.alloc_list.tail as usize)
     }
 
     /// Allocate `size` bytes (8-byte aligned).
@@ -122,11 +115,6 @@ impl Heap {
         self.coalesce();
     }
 
-    /// Translates a virtual memory address into a physical one.
-    pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        self.root_ppn.as_page_table().translate(vaddr)
-    }
-
     /// Merge adjacent free chunks into a bigger chunk.
     pub fn coalesce(&self) {
         let tail = self.alloc_list.tail;
@@ -154,71 +142,71 @@ impl Heap {
         }
     }
 
-    /// Identity map all sections of the kernel's memory.
-    pub fn identity_map(&self) -> Result<(), page::Error> {
-        let root_table = self.root_ppn.as_page_table_mut();
+    // /// Identity map all sections of the kernel's memory.
+    // pub fn identity_map(&self) -> Result<(), page::Error> {
+    //     let root_table = unsafe { self.root_ppn.as_page_table_mut() };
 
-        root_table.id_map_range(
-            PhysAddr::from(uart::QEMU_ADDR),
-            PhysAddr::from(uart::QEMU_ADDR) + 256,
-            PteFlags::R | PteFlags::W,
-            buddy(),
-        )?;
+    //     root_table.id_map_range(
+    //         PhysAddr::new_trunc(uart::QEMU_ADDR),
+    //         PhysAddr::new_trunc(uart::QEMU_ADDR) + 256,
+    //         EntryFlags::R | EntryFlags::W,
+    //         buddy(),
+    //     )?;
 
-        root_table.id_map_range(
-            self.alloc_list.head_addr(),
-            self.alloc_list.tail_addr(),
-            PteFlags::R | PteFlags::W,
-            buddy(),
-        )?;
+    //     root_table.id_map_range(
+    //         self.alloc_list.head_addr(),
+    //         self.alloc_list.tail_addr(),
+    //         EntryFlags::R | EntryFlags::W,
+    //         buddy(),
+    //     )?;
 
-        // SAFETY: the linker-script symbols below are valid addresses
-        // provided by the linker and represent the kernel's memory layout.
-        unsafe {
-            root_table.id_map_range(
-                PhysAddr::from(HEAP_START),
-                PhysAddr::from(HEAP_START) + HEAP_SIZE,
-                PteFlags::R | PteFlags::W,
-                buddy(),
-            )?;
+    //     // SAFETY: the linker-script symbols below are valid addresses
+    //     // provided by the linker and represent the kernel's memory layout.
+    //     unsafe {
+    //         root_table.id_map_range(
+    //             PhysAddr::new_trunc(HEAP_START),
+    //             PhysAddr::new_trunc(HEAP_START) + HEAP_SIZE,
+    //             EntryFlags::R | EntryFlags::W,
+    //             buddy(),
+    //         )?;
 
-            root_table.id_map_range(
-                PhysAddr::from(TEXT_START),
-                PhysAddr::from(TEXT_END),
-                PteFlags::R | PteFlags::X,
-                buddy(),
-            )?;
+    //         root_table.id_map_range(
+    //             PhysAddr::new_trunc(TEXT_START),
+    //             PhysAddr::new_trunc(TEXT_END),
+    //             EntryFlags::R | EntryFlags::X,
+    //             buddy(),
+    //         )?;
 
-            root_table.id_map_range(
-                PhysAddr::from(RODATA_START),
-                PhysAddr::from(RODATA_END),
-                PteFlags::R | PteFlags::X,
-                buddy(),
-            )?;
+    //         root_table.id_map_range(
+    //             PhysAddr::new_trunc(RODATA_START),
+    //             PhysAddr::new_trunc(RODATA_END),
+    //             EntryFlags::R | EntryFlags::X,
+    //             buddy(),
+    //         )?;
 
-            root_table.id_map_range(
-                PhysAddr::from(DATA_START),
-                PhysAddr::from(DATA_END),
-                PteFlags::R | PteFlags::W,
-                buddy(),
-            )?;
+    //         root_table.id_map_range(
+    //             PhysAddr::new_trunc(DATA_START),
+    //             PhysAddr::new_trunc(DATA_END),
+    //             EntryFlags::R | EntryFlags::W,
+    //             buddy(),
+    //         )?;
 
-            root_table.id_map_range(
-                PhysAddr::from(BSS_START),
-                PhysAddr::from(BSS_END),
-                PteFlags::R | PteFlags::W,
-                buddy(),
-            )?;
+    //         root_table.id_map_range(
+    //             PhysAddr::new_trunc(BSS_START),
+    //             PhysAddr::new_trunc(BSS_END),
+    //             EntryFlags::R | EntryFlags::W,
+    //             buddy(),
+    //         )?;
 
-            root_table.id_map_range(
-                PhysAddr::from(KERNEL_STACK_START),
-                PhysAddr::from(KERNEL_STACK_END),
-                PteFlags::R | PteFlags::W,
-                buddy(),
-            )?;
-        }
-        Ok(())
-    }
+    //         root_table.id_map_range(
+    //             PhysAddr::new_trunc(KERNEL_STACK_START),
+    //             PhysAddr::new_trunc(KERNEL_STACK_END),
+    //             EntryFlags::R | EntryFlags::W,
+    //             buddy(),
+    //         )?;
+    //     }
+    //     Ok(())
+    // }
 }
 
 /// A contiguous sequence of allocation nodes spanning the kernel heap region.
@@ -237,16 +225,6 @@ struct AllocationList {
 unsafe impl Send for AllocationList {}
 
 impl AllocationList {
-    /// Get the memory address of the list head.
-    pub fn head_addr(&self) -> PhysAddr {
-        PhysAddr::from(self.head.as_raw() as usize)
-    }
-
-    /// Get the memory address of the list tail.
-    pub fn tail_addr(&self) -> PhysAddr {
-        PhysAddr::from(self.tail as usize)
-    }
-
     /// Return an iterator over all nodes in the list.
     const fn iter_nodes(&self) -> NodeIter<'_> {
         NodeIter {

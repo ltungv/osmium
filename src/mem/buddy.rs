@@ -1,6 +1,10 @@
 use core::{fmt, slice};
 
-use crate::{PAGE_SIZE, addr::PhysAddr, mem::ppn::PhysPageNumber};
+use crate::{
+    PAGE_SIZE,
+    addr::{PhysAddr, phys_to_virt},
+    mem::ppn::PhysPageNumber,
+};
 
 const MAX_ORDER: usize = 12;
 
@@ -15,7 +19,7 @@ impl fmt::Debug for BuddyAlloc {
         writeln!(f, "BuddyAllocator")?;
         writeln!(
             f,
-            "frames: {:?} -> {:?} ({} frames, {} KB)",
+            "frames: {:p} -> {:p} ({} frames, {} KB)",
             self.addr,
             self.addr + state.headers.len(),
             state.headers.len(),
@@ -49,7 +53,7 @@ impl fmt::Debug for BuddyAlloc {
 
 impl BuddyAlloc {
     pub unsafe fn new(addr: PhysAddr, len: usize) -> Option<Self> {
-        let aligned_addr = addr.align(align_of::<Header>());
+        let aligned_addr = addr.align(align_of::<Header>())?;
         let state = unsafe { State::new(aligned_addr, addr + len) };
         state.map(|s| Self {
             addr: (aligned_addr + core::mem::size_of_val(s.headers)).ceil(),
@@ -59,15 +63,6 @@ impl BuddyAlloc {
 
     pub fn alloc(&self, order: usize) -> Option<PhysPageNumber> {
         self.state.lock().alloc(order).map(|idx| self.addr + idx)
-    }
-
-    pub fn zalloc(&self, order: usize) -> Option<PhysPageNumber> {
-        self.alloc(order).inspect(|&ppn| {
-            for i in 0..1 << order {
-                let ppn = ppn + i;
-                ppn.as_slice_mut().fill(0);
-            }
-        })
     }
 
     pub fn dealloc(&self, ppn: PhysPageNumber) {
@@ -89,7 +84,7 @@ impl State {
             return None;
         }
         let len = end - start;
-        let headers_ptr = unsafe { start.as_ptr_mut::<Header>() };
+        let headers_ptr = unsafe { phys_to_virt(start).as_ptr_mut::<Header>() };
         let mut unprovisioned_frames = len / (size_of::<Header>() + PAGE_SIZE);
         for i in 0..unprovisioned_frames {
             unsafe {
