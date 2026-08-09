@@ -1,15 +1,18 @@
 use core::{fmt, ops};
 
-use crate::{addr::VirtAddr, mem::ppn::PhysPageNumber};
-
-const VPN_BITS: usize = 27;
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtPageNumber(usize);
 
 impl VirtPageNumber {
-    pub fn identity_map(self) -> PhysPageNumber {
-        PhysPageNumber::from(self.0)
+    pub const BITS: usize = 27;
+
+    pub const fn new_trunc(vpn: usize) -> Self {
+        let mask = (1 << Self::BITS) - 1;
+        Self(vpn & mask)
+    }
+
+    pub const fn get(self) -> usize {
+        self.0
     }
 
     pub const fn indices(self) -> [usize; 3] {
@@ -33,19 +36,7 @@ impl ops::Sub<Self> for VirtPageNumber {
     }
 }
 
-impl From<VirtPageNumber> for VirtAddr {
-    fn from(ppn: VirtPageNumber) -> Self {
-        Self::from(ppn.0 << 12)
-    }
-}
-
-impl From<usize> for VirtPageNumber {
-    fn from(bits: usize) -> Self {
-        Self(bits & ((1 << VPN_BITS) - 1))
-    }
-}
-
-impl fmt::Debug for VirtPageNumber {
+impl fmt::Pointer for VirtPageNumber {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "vpn@{:x}", self.0)
     }

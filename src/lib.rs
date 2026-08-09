@@ -27,15 +27,13 @@ use alloc::vec::Vec;
 use mem::buddy;
 
 use crate::{
-    addr::VirtAddr,
-    mem::{kheap, ppn::PhysPageNumber},
+    addr::{PhysAddr, VirtAddr},
+    mem::{kheap, page_table, ppn::PhysPageNumber},
+    uart::QEMU_ADDR,
 };
 
 /// The size of a page in bytes.
-pub const PAGE_SIZE: usize = 1 << PAGE_ORDER;
-
-/// The number of bits needed to represent the page size.
-pub const PAGE_ORDER: usize = 12;
+pub const PAGE_SIZE: usize = 4096;
 
 unsafe extern "C" {
     /// First memory address in the `.text` section.
@@ -90,6 +88,7 @@ pub extern "C" fn kinit() -> usize {
     uart::init();
     mem::initialize_frame_allocator();
     mem::initialize_kheap_allocator();
+    mem::initialize_page_table();
     println!("{:?}\n", buddy());
 
     println!("---------------------------------------------");
@@ -100,7 +99,9 @@ pub extern "C" fn kinit() -> usize {
     for (order, page) in ppns.iter_mut().take(12).enumerate().rev() {
         let ppn = buddy().alloc(order);
         *page = ppn;
-        println!("alloc {ppn:?}");
+        if let Some(ppn) = page {
+            println!("alloc {ppn:p}");
+        }
     }
 
     println!("---------------------------------------------");
@@ -109,22 +110,28 @@ pub extern "C" fn kinit() -> usize {
 
     for &ppn in ppns.iter().flatten() {
         buddy().dealloc(ppn);
-        println!("dealloc {ppn:?}");
+        println!("dealloc {ppn:p}");
     }
 
     println!("---------------------------------------------");
     println!("{:?}\n", buddy());
     println!("---------------------------------------------");
 
-    let p = unsafe { VirtAddr::from(HEAP_START) };
-    let m = kheap().translate(p).unwrap_or_else(|| 0.into());
-    println!("Walk {:?} = {:?}", p, m);
+    let p = unsafe { VirtAddr::new_trunc(HEAP_START) };
+    let m = page_table()
+        .translate(p)
+        .unwrap_or_else(|| PhysAddr::new_trunc(0));
 
-    let p = VirtAddr::from(uart::QEMU_ADDR);
-    let m = kheap().translate(p).unwrap_or_else(|| 0.into());
-    println!("Walk {:?} = {:?}", p, m);
+    println!("Walk {:p} = {:p}", p, m);
 
-    kheap().satp()
+    let p = VirtAddr::new_trunc(QEMU_ADDR);
+    let m = page_table()
+        .translate(p)
+        .unwrap_or_else(|| PhysAddr::new_trunc(0));
+
+    println!("Walk {:p} = {:p}", p, m);
+
+    page_table().satp()
 }
 
 /// Kernel main runtime.
@@ -165,8 +172,8 @@ pub extern "C" fn kmain() {
 }
 
 /// Context of the frame causing the trap.
-#[derive(Debug, Clone, Copy)]
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct TrapFrame {
     gp_regs: [usize; 32],
     fp_regs: [usize; 32],

@@ -1,7 +1,7 @@
 use core::{fmt, ops};
 
 use crate::{
-    PAGE_ORDER, PAGE_SIZE,
+    PAGE_SIZE,
     mem::{ppn::PhysPageNumber, vpn::VirtPageNumber},
 };
 
@@ -9,51 +9,30 @@ use crate::{
 pub struct PhysAddr(usize);
 
 impl PhysAddr {
+    const BITS: usize = 56;
+
+    pub const fn new_trunc(addr: usize) -> Self {
+        let mask = (1 << Self::BITS) - 1;
+        Self(addr & mask)
+    }
+
     /// Aligns this physical address to the next `exp`-byte boundary, and returns the aligned
     /// physical address.
-    pub fn align(self, exp: usize) -> Self {
-        assert!(exp.is_power_of_two());
-        Self((self.0 + exp - 1) & !(exp - 1))
+    pub const fn align(self, exp: usize) -> Option<Self> {
+        if !exp.is_power_of_two() {
+            return None;
+        }
+        Some(Self((self.0 + exp - 1) & !(exp - 1)))
     }
 
     /// Returns the physical page number of the page after or at the current address.
-    pub fn ceil(self) -> PhysPageNumber {
-        PhysPageNumber::from(self.0.div_ceil(PAGE_SIZE))
+    pub const fn ceil(self) -> PhysPageNumber {
+        PhysPageNumber::new_trunc(self.0.div_ceil(PAGE_SIZE))
     }
 
     /// Returns the physical page number of the page containing the address.
-    pub fn floor(self) -> PhysPageNumber {
-        PhysPageNumber::from(self.0 / PAGE_SIZE)
-    }
-
-    /// # SAFETY
-    ///
-    /// Casting a physical address into a raw pointer is generally unsafe because it's not guaranteed
-    /// that the raw pointer points to the same physical memory. If the memory management unit is
-    /// enabled, raw pointers is automatically translated into actual physical addresses. Additionally,
-    /// the caller must make sure that the physical address is aligned to the alignment of the given
-    /// type `T`.
-    ///
-    /// It's safe to cast a physical address into a raw pointer under two scenarios:
-    /// * The memory management unit is disabled.
-    /// * The memory management unit is enabled and the physical address has been identity mapped.
-    pub const unsafe fn as_ptr<T>(self) -> *const T {
-        self.0 as *const T
-    }
-
-    /// # SAFETY
-    ///
-    /// Casting a physical address into a raw pointer is generally unsafe because it's not guaranteed
-    /// that the raw pointer points to the same physical memory. If the memory management unit is
-    /// enabled, raw pointers is automatically translated into actual physical addresses. Additionally,
-    /// the caller must make sure that the physical address is aligned to the alignment of the given
-    /// type `T`.
-    ///
-    /// It's safe to cast a physical address into a raw pointer under two scenarios:
-    /// * The memory management unit is disabled.
-    /// * The memory management unit is enabled and the physical address has been identity mapped.
-    pub const unsafe fn as_ptr_mut<T>(self) -> *mut T {
-        self.0 as *mut T
+    pub const fn floor(self) -> PhysPageNumber {
+        PhysPageNumber::new_trunc(self.0 / PAGE_SIZE)
     }
 }
 
@@ -73,19 +52,7 @@ impl ops::Sub<Self> for PhysAddr {
     }
 }
 
-impl From<PhysAddr> for PhysPageNumber {
-    fn from(addr: PhysAddr) -> Self {
-        Self::from(addr.0 >> PAGE_ORDER)
-    }
-}
-
-impl From<usize> for PhysAddr {
-    fn from(value: usize) -> Self {
-        Self(value)
-    }
-}
-
-impl fmt::Debug for PhysAddr {
+impl fmt::Pointer for PhysAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "phys@{:x}", self.0)
     }
@@ -95,10 +62,29 @@ impl fmt::Debug for PhysAddr {
 pub struct VirtAddr(usize);
 
 impl VirtAddr {
-    /// Returns the offset of the virtual address, corresponding to the first `PAGE_SIZE_BITS` bits
-    /// of the virtual address.
+    const BITS: usize = 39;
+
+    pub const fn new_trunc(addr: usize) -> Self {
+        let mask = (1 << Self::BITS) - 1;
+        Self(addr & mask)
+    }
+
+    /// Returns the offset of the virtual address.
     pub const fn offset(self) -> usize {
         self.0 & (PAGE_SIZE - 1)
+    }
+
+    /// Returns the physical page number of the page containing the address.
+    pub const fn floor(self) -> VirtPageNumber {
+        VirtPageNumber::new_trunc(self.0 / PAGE_SIZE)
+    }
+
+    pub const unsafe fn as_ptr<T>(self) -> *const T {
+        self.0 as *const T
+    }
+
+    pub const unsafe fn as_ptr_mut<T>(self) -> *mut T {
+        self.0 as *mut T
     }
 }
 
@@ -118,20 +104,14 @@ impl ops::Sub<Self> for VirtAddr {
     }
 }
 
-impl From<VirtAddr> for VirtPageNumber {
-    fn from(addr: VirtAddr) -> Self {
-        Self::from(addr.0 >> PAGE_ORDER)
-    }
-}
-
-impl From<usize> for VirtAddr {
-    fn from(value: usize) -> Self {
-        Self(value)
-    }
-}
-
-impl fmt::Debug for VirtAddr {
+impl fmt::Pointer for VirtAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "virt@{:x}", self.0)
     }
+}
+
+/// Converts a physical address to a virtual address using the identity mapping scheme.
+#[inline]
+pub const fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
+    VirtAddr::new_trunc(paddr.0)
 }

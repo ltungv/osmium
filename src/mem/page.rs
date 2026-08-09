@@ -1,16 +1,13 @@
 //! An implementation of the Sv39 page-based 39-bit virtual-memory system.
 
-use core::fmt;
+use core::{fmt, marker::PhantomData};
 
 use bitflags::bitflags;
 
 use crate::{
-    addr::{PhysAddr, VirtAddr},
-    mem::{
-        buddy::BuddyAlloc,
-        ppn::{PhysPageNumber, PpnRange},
-        vpn::VirtPageNumber,
-    },
+    PAGE_SIZE,
+    addr::{self, PhysAddr, VirtAddr},
+    mem::{buddy::BuddyAlloc, ppn::PhysPageNumber, vpn::VirtPageNumber},
 };
 
 /// Errors occurs when working with the page table.
@@ -28,15 +25,56 @@ impl fmt::Display for Error {
     }
 }
 
-struct PageMapper {}
+pub struct MappedPageTable<'t> {
+    ppn: PhysPageNumber,
+    _phantom: PhantomData<&'t mut PageTable>,
+}
 
+impl MappedPageTable<'static> {
+    pub fn new(allocator: &BuddyAlloc) -> Result<Self, Error> {
+        let ppn = PageTable::alloc(allocator)?;
+        Ok(Self {
+            ppn,
+            _phantom: PhantomData,
+        })
+    }
+}
+
+impl MappedPageTable<'_> {
+    pub const fn satp(&self) -> usize {
+        8 << 60 | self.ppn.get()
+    }
+
+    pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
+        let page_table = unsafe { &*PageTable::ptr_from_ppn(self.ppn) };
+        page_table.translate(vaddr)
+    }
+
+    pub fn map_range(
+        &mut self,
+        start: PhysAddr,
+        end: PhysAddr,
+        flags: PteFlags,
+        allocator: &BuddyAlloc,
+    ) -> Result<(), Error> {
+        let start = start.floor();
+        let len = end.ceil() - start;
+        let page_table = unsafe { &mut *PageTable::ptr_mut_from_ppn(self.ppn) };
+        for i in 0..len {
+            page_table.map_ident(start + i, flags, allocator)?;
+        }
+        Ok(())
+    }
+}
+
+#[repr(C)]
+#[repr(align(4096))]
 #[derive(Debug)]
-#[repr(C, align(4096))]
-pub struct PageTable([PageTableEntry; 4096]);
+struct PageTable([PageTableEntry; 4096]);
 
 impl PageTable {
     /// Create a mapping between the given virtual address and physical address.
-    pub fn map(
+    fn map(
         &mut self,
         vpn: VirtPageNumber,
         ppn: PhysPageNumber,
@@ -48,26 +86,37 @@ impl PageTable {
         let indices = vpn.indices();
         let mut pte = &mut self.0[indices[2]];
         for &index_next in indices[lvl..2].iter().rev() {
-            if !pte.flags().contains(PteFlags::V) {
-                let inner_ppn = allocator.zalloc(0).ok_or(Error::OutOfMemory)?;
-                *pte = inner_ppn.as_pte(PteFlags::V);
-            }
-            pte = &mut pte.ppn().as_slice_mut::<PageTableEntry>()[index_next];
+            let page_table = Self::create(pte, allocator)?;
+            pte = &mut page_table.0[index_next];
         }
-        *pte = ppn.as_pte(flags | PteFlags::V);
+        pte.set_ppn(ppn);
+        pte.set_flags(flags | PteFlags::V);
         Ok(())
+    }
+
+    fn map_ident(
+        &mut self,
+        ppn: PhysPageNumber,
+        flags: PteFlags,
+        allocator: &BuddyAlloc,
+    ) -> Result<(), Error> {
+        // TODO: See if we can unmap pages that were already mapped when an error occurs.
+        // This current implementation leaves the range partially mapped if an error occurs midway.
+        let vpn = VirtPageNumber::new_trunc(ppn.get());
+        self.map(vpn, ppn, flags, 0, allocator)
     }
 
     /// Unmap the page table.
     #[allow(dead_code)]
-    pub(crate) fn unmap(&mut self, allocator: &BuddyAlloc) {
+    fn unmap(&mut self, allocator: &BuddyAlloc) {
         for lvl2_pte in &mut self.0 {
             let lvl2_pte_flags = lvl2_pte.flags();
             if !lvl2_pte_flags.contains(PteFlags::V) || lvl2_pte_flags.is_rwx() {
                 continue;
             }
             let lvl1_ppn = lvl2_pte.ppn();
-            for lvl1_pte in lvl1_ppn.as_slice_mut::<PageTableEntry>() {
+            let lvl1_page_table = unsafe { lvl2_pte.unchecked_next_table_mut() };
+            for lvl1_pte in &mut lvl1_page_table.0 {
                 let lvl1_pte_flags = lvl1_pte.flags();
                 if !lvl1_pte_flags.contains(PteFlags::V) || lvl1_pte_flags.is_rwx() {
                     continue;
@@ -82,8 +131,8 @@ impl PageTable {
     }
 
     /// Translate the given virtual address into its corresponding physical address.
-    pub(crate) fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let vpn = VirtPageNumber::from(vaddr);
+    fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
+        let vpn = vaddr.floor();
         let indices = vpn.indices();
         let mut pte = &self.0[indices[2]];
         for lvl in (0..3).rev() {
@@ -99,7 +148,7 @@ impl PageTable {
                 // is copied to PPN[1], VPN[0] is copied to PPN[0], and the page offset is copied,
                 // as normal.
                 let ppn = pte.translate(vpn, lvl);
-                let paddr = PhysAddr::from(ppn) + vaddr.offset();
+                let paddr = ppn.addr() + vaddr.offset();
                 return Some(paddr);
             }
             // At level 0, a valid non-leaf PTE means the table is malformed —
@@ -108,24 +157,46 @@ impl PageTable {
                 break;
             }
             // Go to the next entry.
-            pte = &pte.ppn().as_slice::<PageTableEntry>()[indices[lvl - 1]];
+            let page_table = unsafe { pte.unchecked_next_table() };
+            pte = &page_table.0[indices[lvl - 1]];
         }
         None
     }
 
-    /// Performs identity map (vaddr == paddr) for addresses in the range [start, end].
-    pub(crate) fn id_map_range(
-        &mut self,
-        start: PhysAddr,
-        end: PhysAddr,
-        flags: PteFlags,
-        allocator: &BuddyAlloc,
-    ) -> Result<(), Error> {
-        let range = PpnRange::new(start.floor(), end.ceil()).unwrap();
-        for ppn in range {
-            self.map(ppn.identity_map(), ppn, flags, 0, allocator)?;
+    fn alloc(allocator: &BuddyAlloc) -> Result<PhysPageNumber, Error> {
+        let ppn = allocator.alloc(0).ok_or(Error::OutOfMemory)?;
+        let ptr = Self::ptr_mut_from_ppn(ppn).cast::<PageTableEntry>();
+        for i in 0..PAGE_SIZE / size_of::<PageTableEntry>() {
+            unsafe {
+                ptr.add(i).write(PageTableEntry::default());
+            }
         }
-        Ok(())
+        Ok(ppn)
+    }
+
+    fn create<'e>(
+        pte: &'e mut PageTableEntry,
+        allocator: &BuddyAlloc,
+    ) -> Result<&'e mut Self, Error> {
+        if !pte.flags().contains(PteFlags::V) {
+            let ppn = Self::alloc(allocator)?;
+            pte.set_ppn(ppn);
+            pte.set_flags(PteFlags::V);
+        }
+        let page_table = unsafe { pte.unchecked_next_table_mut() };
+        Ok(page_table)
+    }
+
+    #[inline]
+    const fn ptr_from_ppn(ppn: PhysPageNumber) -> *const Self {
+        let vaddr = addr::phys_to_virt(ppn.addr());
+        unsafe { vaddr.as_ptr::<Self>() }
+    }
+
+    #[inline]
+    const fn ptr_mut_from_ppn(ppn: PhysPageNumber) -> *mut Self {
+        let vaddr = addr::phys_to_virt(ppn.addr());
+        unsafe { vaddr.as_ptr_mut::<Self>() }
     }
 }
 
@@ -159,25 +230,44 @@ impl PteFlags {
 
 /// Representation of an entry in the allocation page table.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct PageTableEntry(usize);
-
-impl From<usize> for PageTableEntry {
-    fn from(pte: usize) -> Self {
-        Self(pte)
-    }
-}
+struct PageTableEntry(usize);
 
 impl PageTableEntry {
-    fn translate(self, vpn: VirtPageNumber, lvl: usize) -> PhysPageNumber {
-        let mask = (1 << (lvl * 9)) - 1;
-        self.ppn().blend(vpn.identity_map(), mask)
-    }
-
-    fn ppn(self) -> PhysPageNumber {
-        PhysPageNumber::from(self.0 >> 10)
+    const fn ppn(self) -> PhysPageNumber {
+        PhysPageNumber::new_trunc(self.0 >> 10)
     }
 
     const fn flags(self) -> PteFlags {
         PteFlags::from_bits_retain(self.0 & 0xff)
+    }
+
+    const fn translate(self, vpn: VirtPageNumber, lvl: usize) -> PhysPageNumber {
+        let ppn = self.ppn();
+        let mask = (1 << (lvl * 9)) - 1;
+        let lower = vpn.get() & mask;
+        let upper = ppn.get() & !mask;
+        PhysPageNumber::new_trunc(upper | lower)
+    }
+
+    const fn set_ppn(&mut self, ppn: PhysPageNumber) {
+        let mask = ((1 << PhysPageNumber::BITS) - 1) << 10;
+        self.0 &= !mask;
+        self.0 |= ppn.get() << 10;
+    }
+
+    const fn set_flags(&mut self, flags: PteFlags) {
+        let mask = 0xff;
+        self.0 &= !mask;
+        self.0 |= flags.bits();
+    }
+
+    #[inline]
+    const unsafe fn unchecked_next_table(&self) -> &PageTable {
+        unsafe { &*PageTable::ptr_from_ppn(self.ppn()) }
+    }
+
+    #[inline]
+    const unsafe fn unchecked_next_table_mut(&mut self) -> &mut PageTable {
+        unsafe { &mut *PageTable::ptr_mut_from_ppn(self.ppn()) }
     }
 }
