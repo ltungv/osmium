@@ -1,11 +1,12 @@
 //! Sub-page level, malloc-like allocation system
 
-use core::{fmt, marker::PhantomData, mem::size_of, ptr::NonNull};
+use core::{marker::PhantomData, mem::size_of, ptr::NonNull};
 
 use crate::{
     PAGE_SIZE,
     addr::{PhysAddr, phys_to_virt},
     mem::buddy::BuddyAlloc,
+    println,
 };
 
 /// Number of pages used for the kernel heap allocator.
@@ -16,16 +17,10 @@ pub struct Heap {
     alloc_list: AllocationList,
 }
 
-impl fmt::Debug for Heap {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.alloc_list.fmt(f)
-    }
-}
-
 impl Heap {
     /// Initialize the kernel's memory.
-    pub fn new(frame_allocator: &BuddyAlloc) -> Option<Self> {
-        let head_ppn = frame_allocator.alloc(6)?;
+    pub fn new(allocator: &mut BuddyAlloc) -> Option<Self> {
+        let head_ppn = allocator.alloc(6)?;
         let tail_ppn = head_ppn + PAGE_COUNT;
 
         // SAFETY: `head_ppn.addr()` is the start of a freshly zero-allocated
@@ -142,71 +137,9 @@ impl Heap {
         }
     }
 
-    // /// Identity map all sections of the kernel's memory.
-    // pub fn identity_map(&self) -> Result<(), page::Error> {
-    //     let root_table = unsafe { self.root_ppn.as_page_table_mut() };
-
-    //     root_table.id_map_range(
-    //         PhysAddr::new_trunc(uart::QEMU_ADDR),
-    //         PhysAddr::new_trunc(uart::QEMU_ADDR) + 256,
-    //         EntryFlags::R | EntryFlags::W,
-    //         buddy(),
-    //     )?;
-
-    //     root_table.id_map_range(
-    //         self.alloc_list.head_addr(),
-    //         self.alloc_list.tail_addr(),
-    //         EntryFlags::R | EntryFlags::W,
-    //         buddy(),
-    //     )?;
-
-    //     // SAFETY: the linker-script symbols below are valid addresses
-    //     // provided by the linker and represent the kernel's memory layout.
-    //     unsafe {
-    //         root_table.id_map_range(
-    //             PhysAddr::new_trunc(HEAP_START),
-    //             PhysAddr::new_trunc(HEAP_START) + HEAP_SIZE,
-    //             EntryFlags::R | EntryFlags::W,
-    //             buddy(),
-    //         )?;
-
-    //         root_table.id_map_range(
-    //             PhysAddr::new_trunc(TEXT_START),
-    //             PhysAddr::new_trunc(TEXT_END),
-    //             EntryFlags::R | EntryFlags::X,
-    //             buddy(),
-    //         )?;
-
-    //         root_table.id_map_range(
-    //             PhysAddr::new_trunc(RODATA_START),
-    //             PhysAddr::new_trunc(RODATA_END),
-    //             EntryFlags::R | EntryFlags::X,
-    //             buddy(),
-    //         )?;
-
-    //         root_table.id_map_range(
-    //             PhysAddr::new_trunc(DATA_START),
-    //             PhysAddr::new_trunc(DATA_END),
-    //             EntryFlags::R | EntryFlags::W,
-    //             buddy(),
-    //         )?;
-
-    //         root_table.id_map_range(
-    //             PhysAddr::new_trunc(BSS_START),
-    //             PhysAddr::new_trunc(BSS_END),
-    //             EntryFlags::R | EntryFlags::W,
-    //             buddy(),
-    //         )?;
-
-    //         root_table.id_map_range(
-    //             PhysAddr::new_trunc(KERNEL_STACK_START),
-    //             PhysAddr::new_trunc(KERNEL_STACK_END),
-    //             EntryFlags::R | EntryFlags::W,
-    //             buddy(),
-    //         )?;
-    //     }
-    //     Ok(())
-    // }
+    pub fn debug_print(&self) {
+        self.alloc_list.debug_print();
+    }
 }
 
 /// A contiguous sequence of allocation nodes spanning the kernel heap region.
@@ -233,21 +166,17 @@ impl AllocationList {
             _phantom: PhantomData,
         }
     }
-}
 
-impl fmt::Debug for AllocationList {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn debug_print(&self) {
         for node_ptr in self.iter_nodes() {
             let node = node_ptr.as_ref();
-            writeln!(
-                f,
+            println!(
                 "{:p}: Length = {:<10} Taken = {}",
                 node_ptr.as_raw(),
                 node.get_size(),
                 node.is_taken()
-            )?;
+            );
         }
-        Ok(())
     }
 }
 

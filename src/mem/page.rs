@@ -31,7 +31,7 @@ pub struct MappedPageTable<'t> {
 }
 
 impl MappedPageTable<'static> {
-    pub fn new(allocator: &BuddyAlloc) -> Result<Self, Error> {
+    pub fn new(allocator: &mut BuddyAlloc) -> Result<Self, Error> {
         let ppn = PageTable::alloc(allocator)?;
         Ok(Self {
             ppn,
@@ -55,7 +55,7 @@ impl MappedPageTable<'_> {
         start: PhysAddr,
         end: PhysAddr,
         flags: PteFlags,
-        allocator: &BuddyAlloc,
+        allocator: &mut BuddyAlloc,
     ) -> Result<(), Error> {
         let start = start.floor();
         let len = end.ceil() - start;
@@ -80,7 +80,7 @@ impl PageTable {
         ppn: PhysPageNumber,
         flags: PteFlags,
         lvl: usize,
-        allocator: &BuddyAlloc,
+        allocator: &mut BuddyAlloc,
     ) -> Result<(), Error> {
         assert!(flags.is_rwx());
         let indices = vpn.indices();
@@ -98,17 +98,15 @@ impl PageTable {
         &mut self,
         ppn: PhysPageNumber,
         flags: PteFlags,
-        allocator: &BuddyAlloc,
+        allocator: &mut BuddyAlloc,
     ) -> Result<(), Error> {
-        // TODO: See if we can unmap pages that were already mapped when an error occurs.
-        // This current implementation leaves the range partially mapped if an error occurs midway.
         let vpn = VirtPageNumber::new_trunc(ppn.get());
         self.map(vpn, ppn, flags, 0, allocator)
     }
 
     /// Unmap the page table.
     #[allow(dead_code)]
-    fn unmap(&mut self, allocator: &BuddyAlloc) {
+    fn unmap(&mut self, allocator: &mut BuddyAlloc) {
         for lvl2_pte in &mut self.0 {
             let lvl2_pte_flags = lvl2_pte.flags();
             if !lvl2_pte_flags.contains(PteFlags::V) || lvl2_pte_flags.is_rwx() {
@@ -163,7 +161,7 @@ impl PageTable {
         None
     }
 
-    fn alloc(allocator: &BuddyAlloc) -> Result<PhysPageNumber, Error> {
+    fn alloc(allocator: &mut BuddyAlloc) -> Result<PhysPageNumber, Error> {
         let ppn = allocator.alloc(0).ok_or(Error::OutOfMemory)?;
         let ptr = Self::ptr_mut_from_ppn(ppn).cast::<PageTableEntry>();
         for i in 0..PAGE_SIZE / size_of::<PageTableEntry>() {
@@ -176,7 +174,7 @@ impl PageTable {
 
     fn create<'e>(
         pte: &'e mut PageTableEntry,
-        allocator: &BuddyAlloc,
+        allocator: &mut BuddyAlloc,
     ) -> Result<&'e mut Self, Error> {
         if !pte.flags().contains(PteFlags::V) {
             let ppn = Self::alloc(allocator)?;
