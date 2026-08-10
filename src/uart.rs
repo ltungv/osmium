@@ -1,6 +1,7 @@
 //! A console for sending and receiving bytes to and from 16550 UART devices.
 
 use core::{
+    error::Error,
     fmt::{self, Write},
     num::NonZeroU8,
     ptr::NonNull,
@@ -9,45 +10,42 @@ use core::{
 /// Address of the UART device on the `virt` machine in `QEMU`.
 pub const QEMU_ADDR: usize = 0x1000_0000;
 
-static CONSOLE: spin::Once<Console> = spin::Once::new();
+static UART_16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
 
-/// Initialize the global console connecting to the default address of the UART device on the `virt`
-/// machine in `QEMU`.
-pub fn init() {
-    CONSOLE.call_once(|| {
+/// Print a formatted string to the global console.
+#[macro_export]
+macro_rules! print {
+    ($($args:tt)*) => {{
+        $crate::uart::print(format_args!($($args)*));
+    }};
+}
+
+/// Print a formatted string to the global console, with a new line.
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\r\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
+}
+
+/// Print to the global console.
+pub fn print(args: core::fmt::Arguments<'_>) {
+    driver()
+        .lock()
+        .write_fmt(args)
+        .expect("Printing to serial failed");
+}
+
+/// Get a reference to the global console connected to the default address of the UART device on
+/// the `virt` machine in `QEMU`.
+pub fn driver() -> &'static spin::Mutex<Uart16550> {
+    UART_16550.call_once(|| {
         let mut uart = unsafe {
             let addr = NonNull::new_unchecked(QEMU_ADDR as *mut u8);
             Uart16550::new(addr, 1).expect("16550 UART driver should be created")
         };
         uart.init();
-        Console::new(uart)
-    });
-}
-
-/// Get a reference to the global console connected to the default address of the UART device on
-/// the `virt` machine in `QEMU`.
-pub fn console() -> &'static Console {
-    CONSOLE
-        .get()
-        .expect("kernel's console has been initialized")
-}
-
-/// A console providing safe concurrently access to some 16550 UART device.
-pub struct Console {
-    uart: spin::Mutex<Uart16550>,
-}
-
-impl Console {
-    const fn new(uart: Uart16550) -> Self {
-        Self {
-            uart: spin::Mutex::new(uart),
-        }
-    }
-
-    /// Take exclusive access of the underlying 16550 UART driver and give it to the closure.
-    pub fn write_with<W: FnOnce(&mut Uart16550)>(&self, write: W) {
-        write(&mut self.uart.lock());
-    }
+        spin::Mutex::new(uart)
+    })
 }
 
 /// A driver for 16550 UART devices backed by memory-mapped I/O addresses.
@@ -62,6 +60,17 @@ pub struct Uart16550 {
 // exclusively to the driver instance. All operations take a `&mut self` which ensures the driver is
 // only accessed by at most one thread at a time.
 unsafe impl Send for Uart16550 {}
+
+impl Write for Uart16550 {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        s.bytes().for_each(|b| {
+            while !self.try_put(b) {
+                core::hint::spin_loop();
+            }
+        });
+        Ok(())
+    }
+}
 
 #[allow(dead_code)]
 impl Uart16550 {
@@ -205,36 +214,6 @@ impl Uart16550 {
     }
 }
 
-impl Write for Uart16550 {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        s.bytes().for_each(|b| {
-            while !self.try_put(b) {
-                core::hint::spin_loop();
-            }
-        });
-        Ok(())
-    }
-}
-
-/// Print to the global console.
-#[macro_export]
-macro_rules! print {
-    ($($args:tt)*) => {{
-        use core::fmt::Write;
-        let console = $crate::uart::console();
-        console.write_with(|uart| {
-            let _ = write!(uart, $($args)+);
-        });
-    }};
-}
-
-/// Print to the global console, with a new line.
-#[macro_export]
-macro_rules! println {
-    () => ($crate::print!("\r\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
-}
-
 #[derive(Debug)]
 enum InvalidAddressError {
     /// The given address is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
@@ -244,6 +223,8 @@ enum InvalidAddressError {
     /// The given stride is invalid. A stride must be non-zero and a power of two.
     InvalidStride(u8),
 }
+
+impl Error for InvalidAddressError {}
 
 impl fmt::Display for InvalidAddressError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

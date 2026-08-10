@@ -69,12 +69,10 @@ impl VirtAddr {
         Self(addr & mask)
     }
 
-    /// Returns the offset of the virtual address.
     pub const fn offset(self) -> usize {
         self.0 & (PAGE_SIZE - 1)
     }
 
-    /// Returns the physical page number of the page containing the address.
     pub const fn floor(self) -> VirtPageNumber {
         VirtPageNumber::new_trunc(self.0 / PAGE_SIZE)
     }

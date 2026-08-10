@@ -24,12 +24,11 @@ mod uart;
 use core::{arch::asm, ptr::NonNull};
 
 use alloc::vec::Vec;
-use mem::buddy;
+use mem::frame_allocator;
 
 use crate::{
     addr::{PhysAddr, VirtAddr},
-    mem::{kheap, page_table, ppn::PhysPageNumber},
-    uart::QEMU_ADDR,
+    mem::{kheap, page::PteFlags, page_table},
 };
 
 /// The size of a page in bytes.
@@ -79,59 +78,99 @@ unsafe extern "C" {
     pub static MEMORY_END: usize;
 }
 
-const NPAGES: usize = 16;
-
 /// Kernel initialization routine. The bootloader (`boot.S`) jumps to this function after setting up
 /// the device in machine mode in `_start`.
+///
+/// # Panics
+///
+/// The initialization process will panic if any error occurs. Most issues come from the MMU not
+/// being initialized properly, which can be a result of bugs or insufficient memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn kinit() -> usize {
-    uart::init();
-    mem::initialize_frame_allocator();
-    mem::initialize_kheap_allocator();
-    mem::initialize_page_table();
-    println!("{:?}\n", buddy());
+    let mut page_table = page_table().lock();
+    let (kheap_start, kheap_end) = {
+        let heap = kheap().lock();
+        (heap.start(), heap.end())
+    };
 
-    println!("---------------------------------------------");
-    println!("{:?}\n", buddy());
-    println!("---------------------------------------------");
+    // SAFETY: the linker-script symbols below are valid addresses
+    // provided by the linker and represent the kernel's memory layout.
+    unsafe {
+        page_table
+            .map_range(
+                PhysAddr::new_trunc(HEAP_START),
+                PhysAddr::new_trunc(HEAP_START) + HEAP_SIZE,
+                PteFlags::R | PteFlags::W,
+                &mut frame_allocator().lock(),
+            )
+            .expect("16550 UART device address should be mapped");
 
-    let mut ppns: [Option<PhysPageNumber>; NPAGES] = [None; NPAGES];
-    for (order, page) in ppns.iter_mut().take(12).enumerate().rev() {
-        let ppn = buddy().alloc(order);
-        *page = ppn;
-        if let Some(ppn) = page {
-            println!("alloc {ppn:p}");
-        }
+        page_table
+            .map_range(
+                PhysAddr::new_trunc(TEXT_START),
+                PhysAddr::new_trunc(TEXT_END),
+                PteFlags::R | PteFlags::X,
+                &mut frame_allocator().lock(),
+            )
+            .expect("16550 UART device address should be mapped");
+
+        page_table
+            .map_range(
+                PhysAddr::new_trunc(RODATA_START),
+                PhysAddr::new_trunc(RODATA_END),
+                PteFlags::R | PteFlags::X,
+                &mut frame_allocator().lock(),
+            )
+            .expect("16550 UART device address should be mapped");
+
+        page_table
+            .map_range(
+                PhysAddr::new_trunc(DATA_START),
+                PhysAddr::new_trunc(DATA_END),
+                PteFlags::R | PteFlags::W,
+                &mut frame_allocator().lock(),
+            )
+            .expect("16550 UART device address should be mapped");
+
+        page_table
+            .map_range(
+                PhysAddr::new_trunc(BSS_START),
+                PhysAddr::new_trunc(BSS_END),
+                PteFlags::R | PteFlags::W,
+                &mut frame_allocator().lock(),
+            )
+            .expect("16550 UART device address should be mapped");
+
+        page_table
+            .map_range(
+                PhysAddr::new_trunc(KERNEL_STACK_START),
+                PhysAddr::new_trunc(KERNEL_STACK_END),
+                PteFlags::R | PteFlags::W,
+                &mut frame_allocator().lock(),
+            )
+            .expect("16550 UART device address should be mapped");
     }
 
-    println!("---------------------------------------------");
-    println!("{:?}\n", buddy());
-    println!("---------------------------------------------");
+    page_table
+        .map_range(
+            PhysAddr::new_trunc(uart::QEMU_ADDR),
+            PhysAddr::new_trunc(uart::QEMU_ADDR) + 256,
+            PteFlags::R | PteFlags::W,
+            &mut frame_allocator().lock(),
+        )
+        .expect("16550 UART device address should be mapped");
 
-    for &ppn in ppns.iter().flatten() {
-        buddy().dealloc(ppn);
-        println!("dealloc {ppn:p}");
-    }
+    page_table
+        .map_range(
+            kheap_start,
+            kheap_end,
+            PteFlags::R | PteFlags::W,
+            &mut frame_allocator().lock(),
+        )
+        .expect("kernel's memory should be mapped");
 
-    println!("---------------------------------------------");
-    println!("{:?}\n", buddy());
-    println!("---------------------------------------------");
-
-    let p = unsafe { VirtAddr::new_trunc(HEAP_START) };
-    let m = page_table()
-        .translate(p)
-        .unwrap_or_else(|| PhysAddr::new_trunc(0));
-
-    println!("Walk {:p} = {:p}", p, m);
-
-    let p = VirtAddr::new_trunc(QEMU_ADDR);
-    let m = page_table()
-        .translate(p)
-        .unwrap_or_else(|| PhysAddr::new_trunc(0));
-
-    println!("Walk {:p} = {:p}", p, m);
-
-    page_table().satp()
+    frame_allocator().lock().debug_print();
+    page_table.satp()
 }
 
 /// Kernel main runtime.
@@ -139,16 +178,31 @@ pub extern "C" fn kinit() -> usize {
 pub extern "C" fn kmain() {
     println!("hello, world!");
     {
+        let vaddr = VirtAddr::new_trunc(unsafe { HEAP_START });
+        let paddr = page_table()
+            .lock()
+            .translate(vaddr)
+            .unwrap_or(PhysAddr::new_trunc(0));
+
+        println!("{vaddr:p} --> {paddr:p}");
+    }
+    {
         let v1: Vec<u8> = Vec::with_capacity(8);
         let v2: Vec<u8> = Vec::with_capacity(8);
         let v3: Vec<u8> = Vec::with_capacity(8);
-        println!("{:?}", kheap());
+        println!("allocated v1 v2 v3");
+        kheap().lock().debug_print();
+        println!("-------------------------------");
 
         drop(v2);
-        println!("{:?}", kheap());
+        println!("dropped v2");
+        kheap().lock().debug_print();
+        println!("-------------------------------");
 
         let v4: Vec<u8> = Vec::with_capacity(64);
-        println!("{:?}", kheap());
+        println!("allocated v4");
+        kheap().lock().debug_print();
+        println!("-------------------------------");
 
         drop(v1);
         drop(v3);
@@ -160,6 +214,7 @@ pub extern "C" fn kmain() {
         // Set the next machine timer to fire.
         let mtimecmp = 0x0200_4000 as *mut u64;
         let mtime = 0x0200_bff8 as *const u64;
+
         // The frequency given by QEMU is 10_000_000 Hz, so this sets
         // the next interrupt to fire one second from now.
         mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
