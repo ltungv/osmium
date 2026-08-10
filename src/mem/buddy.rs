@@ -101,35 +101,6 @@ impl BuddyAlloc {
             .expect("order should only be at most `MAX_EQUAL`");
     }
 
-    fn pop_free(&mut self, order: usize) -> Option<usize> {
-        let link = &mut self.free_list[order];
-        link.next.take().inspect(|&idx| {
-            link.next = self.headers[idx].link.next.take();
-        })
-    }
-
-    fn push_free(&mut self, order: usize, idx: usize) {
-        let link = &mut self.free_list[order];
-        self.headers[idx].link.next = link.next.replace(idx);
-    }
-
-    fn remove_free(&mut self, order: usize, idx: usize) {
-        let mut prev: Option<usize> = None;
-        let mut next = self.free_list[order].next;
-        while let Some(curr_idx) = next {
-            if curr_idx == idx {
-                if let Some(prev_idx) = prev {
-                    self.headers[prev_idx].link.next = self.headers[curr_idx].link.next.take();
-                } else {
-                    self.free_list[order].next = self.headers[curr_idx].link.next.take();
-                }
-                break;
-            }
-            prev = Some(curr_idx);
-            next = self.headers[curr_idx].link.next;
-        }
-    }
-
     pub fn debug_print(&self) {
         println!("BuddyAllocator");
         println!(
@@ -160,6 +131,35 @@ impl BuddyAlloc {
             total_free_frames,
             PAGE_SIZE * total_free_frames / 1024
         );
+    }
+
+    fn pop_free(&mut self, order: usize) -> Option<usize> {
+        let link = &mut self.free_list[order];
+        link.next.take().inspect(|&idx| {
+            link.next = self.headers[idx].link.next.take();
+        })
+    }
+
+    fn push_free(&mut self, order: usize, idx: usize) {
+        let link = &mut self.free_list[order];
+        self.headers[idx].link.next = link.next.replace(idx);
+    }
+
+    fn remove_free(&mut self, order: usize, idx: usize) {
+        let mut prev: Option<usize> = None;
+        let mut next = self.free_list[order].next;
+        while let Some(curr_idx) = next {
+            if curr_idx == idx {
+                if let Some(prev_idx) = prev {
+                    self.headers[prev_idx].link.next = self.headers[curr_idx].link.next.take();
+                } else {
+                    self.free_list[order].next = self.headers[curr_idx].link.next.take();
+                }
+                break;
+            }
+            prev = Some(curr_idx);
+            next = self.headers[curr_idx].link.next;
+        }
     }
 }
 

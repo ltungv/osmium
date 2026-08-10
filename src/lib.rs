@@ -103,7 +103,7 @@ pub extern "C" fn kinit() -> usize {
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
-            .expect("16550 UART device address should be mapped");
+            .expect("`HEAP` memory section should be mapped");
 
         page_table
             .map_range(
@@ -112,7 +112,7 @@ pub extern "C" fn kinit() -> usize {
                 PteFlags::R | PteFlags::X,
                 &mut frame_allocator().lock(),
             )
-            .expect("16550 UART device address should be mapped");
+            .expect("`TEXT` memory section should be mapped");
 
         page_table
             .map_range(
@@ -121,7 +121,7 @@ pub extern "C" fn kinit() -> usize {
                 PteFlags::R | PteFlags::X,
                 &mut frame_allocator().lock(),
             )
-            .expect("16550 UART device address should be mapped");
+            .expect("`RODATA` memory section should be mapped");
 
         page_table
             .map_range(
@@ -130,7 +130,7 @@ pub extern "C" fn kinit() -> usize {
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
-            .expect("16550 UART device address should be mapped");
+            .expect("`DATA` memory section should be mapped");
 
         page_table
             .map_range(
@@ -139,7 +139,7 @@ pub extern "C" fn kinit() -> usize {
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
-            .expect("16550 UART device address should be mapped");
+            .expect("`BSS` memory section should be mapped");
 
         page_table
             .map_range(
@@ -148,7 +148,7 @@ pub extern "C" fn kinit() -> usize {
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
-            .expect("16550 UART device address should be mapped");
+            .expect("`KERNEL_STACK` memory section should be mapped");
     }
 
     page_table
@@ -158,7 +158,7 @@ pub extern "C" fn kinit() -> usize {
             PteFlags::R | PteFlags::W,
             &mut frame_allocator().lock(),
         )
-        .expect("16550 UART device address should be mapped");
+        .expect("16550 UART device addresses should be mapped");
 
     page_table
         .map_range(
@@ -167,7 +167,7 @@ pub extern "C" fn kinit() -> usize {
             PteFlags::R | PteFlags::W,
             &mut frame_allocator().lock(),
         )
-        .expect("kernel's memory should be mapped");
+        .expect("`KERNEL_HEAP` memory section should be mapped");
 
     frame_allocator().lock().debug_print();
     page_table.satp()
@@ -208,17 +208,14 @@ pub extern "C" fn kmain() {
         drop(v3);
         drop(v4);
     }
-
     println!("triggering faults...");
     unsafe {
         // Set the next machine timer to fire.
         let mtimecmp = 0x0200_4000 as *mut u64;
         let mtime = 0x0200_bff8 as *const u64;
-
         // The frequency given by QEMU is 10_000_000 Hz, so this sets
         // the next interrupt to fire one second from now.
         mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
-
         // Let's cause a page fault and see what happens. This should trap
         // to m_trap under trap.rs
         let v = NonNull::dangling();
@@ -362,6 +359,23 @@ fn abort() -> ! {
     loop {
         unsafe {
             asm!("wfi");
+        }
+    }
+}
+
+/// Errors that occur when working with the page table.
+#[derive(Debug)]
+pub enum Error {
+    /// There's no memory left on the device for the kernel.
+    OutOfMemory,
+}
+
+impl core::error::Error for Error {}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OutOfMemory => write!(f, "out of memory"),
         }
     }
 }
