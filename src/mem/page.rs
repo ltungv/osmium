@@ -1,29 +1,14 @@
 //! An implementation of the Sv39 page-based 39-bit virtual-memory system.
 
-use core::{fmt, marker::PhantomData};
+use core::marker::PhantomData;
 
 use bitflags::bitflags;
 
 use crate::{
-    PAGE_SIZE,
+    Error, PAGE_SIZE,
     addr::{self, PhysAddr, VirtAddr},
     mem::{buddy::BuddyAlloc, ppn::PhysPageNumber, vpn::VirtPageNumber},
 };
-
-/// Errors occurs when working with the page table.
-#[derive(Debug)]
-pub enum Error {
-    /// There's no available frame.
-    OutOfMemory,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::OutOfMemory => write!(f, "out of memory"),
-        }
-    }
-}
 
 pub struct MappedPageTable<'t> {
     ppn: PhysPageNumber,
