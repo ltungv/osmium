@@ -16,8 +16,8 @@ pub struct BuddyAlloc {
 }
 
 impl BuddyAlloc {
-    pub unsafe fn new(addr: PhysAddr, len: usize) -> Option<Self> {
-        let addr_start = addr.align(align_of::<Header>())?;
+    pub unsafe fn new(addr: PhysAddr, len: usize) -> Self {
+        let addr_start = addr.align_up(align_of::<Header>());
         let addr_end = addr + len;
 
         let useable_len = addr_end - addr_start;
@@ -30,8 +30,12 @@ impl BuddyAlloc {
         }
 
         let headers = unsafe { slice::from_raw_parts_mut(headers_ptr, unprovisioned_frames) };
+        let addr = (addr_start + size_of_val(headers))
+            .align_up(PAGE_SIZE)
+            .page_number();
+
         let mut allocator = Self {
-            addr: (addr_start + size_of_val(headers)).ceil(),
+            addr,
             headers,
             free_list: [const { Link::new() }; MAX_ORDER + 1],
         };
@@ -51,7 +55,7 @@ impl BuddyAlloc {
             }
         }
 
-        Some(allocator)
+        allocator
     }
 
     pub fn alloc(&mut self, order: usize) -> Option<PhysPageNumber> {

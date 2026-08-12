@@ -4,6 +4,8 @@ pub mod vpn;
 
 mod buddy;
 mod heap;
+// mod heap_freelist;
+mod linked_heap;
 
 use core::alloc::{GlobalAlloc, Layout};
 
@@ -24,9 +26,8 @@ static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator;
 
 pub fn frame_allocator() -> &'static spin::Mutex<BuddyAlloc> {
     BUDDY_ALLOC.call_once(|| unsafe {
-        buddy::BuddyAlloc::new(PhysAddr::new_trunc(HEAP_START), HEAP_SIZE)
-            .map(spin::Mutex::new)
-            .expect("`HEAP_START` and `HEAP_SIZE` represents a valid memory region")
+        let buddy = buddy::BuddyAlloc::new(PhysAddr::new_trunc(HEAP_START), HEAP_SIZE);
+        spin::Mutex::new(buddy)
     })
 }
 
