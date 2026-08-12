@@ -37,16 +37,19 @@ impl MappedPageTable<'_> {
 
     pub fn map_range(
         &mut self,
-        start: PhysAddr,
-        end: PhysAddr,
+        start: VirtAddr,
+        end: VirtAddr,
         flags: PteFlags,
         allocator: &mut BuddyAlloc,
     ) -> Result<(), Error> {
-        let start = start.floor();
-        let len = end.ceil() - start;
         let page_table = unsafe { &mut *PageTable::ptr_mut_from_ppn(self.ppn) };
+        let vpn_start = start.align_down(PAGE_SIZE).page_number();
+        let vpn_end = end.align_up(PAGE_SIZE).page_number();
+        let len = vpn_end - vpn_start;
         for i in 0..len {
-            page_table.map_ident(start + i, flags, allocator)?;
+            let vpn = vpn_start + i;
+            let ppn = PhysPageNumber::new_trunc(vpn.get());
+            page_table.map(vpn, ppn, flags, 0, allocator)?;
         }
         Ok(())
     }
@@ -58,7 +61,6 @@ impl MappedPageTable<'_> {
 struct PageTable([PageTableEntry; 4096]);
 
 impl PageTable {
-    /// Create a mapping between the given virtual address and physical address.
     fn map(
         &mut self,
         vpn: VirtPageNumber,
@@ -79,17 +81,6 @@ impl PageTable {
         Ok(())
     }
 
-    fn map_ident(
-        &mut self,
-        ppn: PhysPageNumber,
-        flags: PteFlags,
-        allocator: &mut BuddyAlloc,
-    ) -> Result<(), Error> {
-        let vpn = VirtPageNumber::new_trunc(ppn.get());
-        self.map(vpn, ppn, flags, 0, allocator)
-    }
-
-    /// Unmap the page table.
     #[allow(dead_code)]
     fn unmap(&mut self, allocator: &mut BuddyAlloc) {
         for lvl2_pte in &mut self.0 {
@@ -113,9 +104,8 @@ impl PageTable {
         }
     }
 
-    /// Translate the given virtual address into its corresponding physical address.
     fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let vpn = vaddr.floor();
+        let vpn = vaddr.page_number();
         let indices = vpn.indices();
         let mut pte = &self.0[indices[2]];
         for lvl in (0..3).rev() {
@@ -211,7 +201,6 @@ impl PteFlags {
     }
 }
 
-/// Representation of an entry in the allocation page table.
 #[derive(Debug, Default, Clone, Copy)]
 struct PageTableEntry(usize);
 

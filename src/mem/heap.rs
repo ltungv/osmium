@@ -4,7 +4,7 @@ use core::{marker::PhantomData, mem::size_of, ptr::NonNull};
 
 use crate::{
     PAGE_SIZE,
-    addr::{PhysAddr, phys_to_virt},
+    addr::{VirtAddr, phys_to_virt},
     mem::buddy::BuddyAlloc,
     println,
 };
@@ -43,13 +43,13 @@ impl Heap {
     }
 
     /// Get the memory address of the list head.
-    pub fn start(&self) -> PhysAddr {
-        PhysAddr::new_trunc(self.alloc_list.head.as_raw() as usize)
+    pub fn start(&self) -> VirtAddr {
+        VirtAddr::new_trunc(self.alloc_list.head.as_raw() as usize)
     }
 
     /// Get the memory address of the list tail.
-    pub fn end(&self) -> PhysAddr {
-        PhysAddr::new_trunc(self.alloc_list.tail as usize)
+    pub fn end(&self) -> VirtAddr {
+        VirtAddr::new_trunc(self.alloc_list.tail as usize)
     }
 
     /// Allocate `size` bytes (8-byte aligned).

@@ -5,6 +5,16 @@ use crate::{
     mem::{ppn::PhysPageNumber, vpn::VirtPageNumber},
 };
 
+pub const fn align_down(addr: usize, align: usize) -> usize {
+    assert!(align.is_power_of_two(), "align must be a power of two");
+    addr & !(align - 1)
+}
+
+pub const fn align_up(addr: usize, align: usize) -> usize {
+    assert!(align.is_power_of_two(), "align must be a power of two");
+    (addr + align - 1) & !(align - 1)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysAddr(usize);
 
@@ -16,22 +26,11 @@ impl PhysAddr {
         Self(addr & mask)
     }
 
-    /// Aligns this physical address to the next `exp`-byte boundary, and returns the aligned
-    /// physical address.
-    pub const fn align(self, exp: usize) -> Option<Self> {
-        if !exp.is_power_of_two() {
-            return None;
-        }
-        Some(Self((self.0 + exp - 1) & !(exp - 1)))
+    pub const fn align_up(self, align: usize) -> Self {
+        Self::new_trunc(align_up(self.0, align))
     }
 
-    /// Returns the physical page number of the page after or at the current address.
-    pub const fn ceil(self) -> PhysPageNumber {
-        PhysPageNumber::new_trunc(self.0.div_ceil(PAGE_SIZE))
-    }
-
-    /// Returns the physical page number of the page containing the address.
-    pub const fn floor(self) -> PhysPageNumber {
+    pub const fn page_number(self) -> PhysPageNumber {
         PhysPageNumber::new_trunc(self.0 / PAGE_SIZE)
     }
 }
@@ -73,7 +72,15 @@ impl VirtAddr {
         self.0 & (PAGE_SIZE - 1)
     }
 
-    pub const fn floor(self) -> VirtPageNumber {
+    pub const fn align_down(self, align: usize) -> Self {
+        Self::new_trunc(align_down(self.0, align))
+    }
+
+    pub const fn align_up(self, align: usize) -> Self {
+        Self::new_trunc(align_up(self.0, align))
+    }
+
+    pub const fn page_number(self) -> VirtPageNumber {
         VirtPageNumber::new_trunc(self.0 / PAGE_SIZE)
     }
 
@@ -108,7 +115,6 @@ impl fmt::Pointer for VirtAddr {
     }
 }
 
-/// Converts a physical address to a virtual address using the identity mapping scheme.
 #[inline]
 pub const fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
     VirtAddr::new_trunc(paddr.0)
