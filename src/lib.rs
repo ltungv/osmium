@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 use mem::frame_allocator;
 
 use crate::{
-    addr::{PhysAddr, VirtAddr},
+    addr::{PhysAddr, VirtAddr, phys_to_virt},
     mem::{kheap, page::PteFlags, page_table},
 };
 
@@ -98,8 +98,8 @@ pub extern "C" fn kinit() -> usize {
     unsafe {
         page_table
             .map_range(
-                PhysAddr::new_trunc(HEAP_START),
-                PhysAddr::new_trunc(HEAP_START) + HEAP_SIZE,
+                VirtAddr::new_trunc(HEAP_START),
+                VirtAddr::new_trunc(HEAP_START) + HEAP_SIZE,
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
@@ -107,8 +107,8 @@ pub extern "C" fn kinit() -> usize {
 
         page_table
             .map_range(
-                PhysAddr::new_trunc(TEXT_START),
-                PhysAddr::new_trunc(TEXT_END),
+                VirtAddr::new_trunc(TEXT_START),
+                VirtAddr::new_trunc(TEXT_END),
                 PteFlags::R | PteFlags::X,
                 &mut frame_allocator().lock(),
             )
@@ -116,8 +116,8 @@ pub extern "C" fn kinit() -> usize {
 
         page_table
             .map_range(
-                PhysAddr::new_trunc(RODATA_START),
-                PhysAddr::new_trunc(RODATA_END),
+                VirtAddr::new_trunc(RODATA_START),
+                VirtAddr::new_trunc(RODATA_END),
                 PteFlags::R | PteFlags::X,
                 &mut frame_allocator().lock(),
             )
@@ -125,8 +125,8 @@ pub extern "C" fn kinit() -> usize {
 
         page_table
             .map_range(
-                PhysAddr::new_trunc(DATA_START),
-                PhysAddr::new_trunc(DATA_END),
+                VirtAddr::new_trunc(DATA_START),
+                VirtAddr::new_trunc(DATA_END),
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
@@ -134,8 +134,8 @@ pub extern "C" fn kinit() -> usize {
 
         page_table
             .map_range(
-                PhysAddr::new_trunc(BSS_START),
-                PhysAddr::new_trunc(BSS_END),
+                VirtAddr::new_trunc(BSS_START),
+                VirtAddr::new_trunc(BSS_END),
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
@@ -143,8 +143,8 @@ pub extern "C" fn kinit() -> usize {
 
         page_table
             .map_range(
-                PhysAddr::new_trunc(KERNEL_STACK_START),
-                PhysAddr::new_trunc(KERNEL_STACK_END),
+                VirtAddr::new_trunc(KERNEL_STACK_START),
+                VirtAddr::new_trunc(KERNEL_STACK_END),
                 PteFlags::R | PteFlags::W,
                 &mut frame_allocator().lock(),
             )
@@ -153,8 +153,8 @@ pub extern "C" fn kinit() -> usize {
 
     page_table
         .map_range(
-            PhysAddr::new_trunc(uart::QEMU_ADDR),
-            PhysAddr::new_trunc(uart::QEMU_ADDR) + 256,
+            phys_to_virt(uart::QEMU_ADDR),
+            phys_to_virt(uart::QEMU_ADDR) + 256,
             PteFlags::R | PteFlags::W,
             &mut frame_allocator().lock(),
         )
@@ -211,8 +211,8 @@ pub extern "C" fn kmain() {
     println!("triggering faults...");
     unsafe {
         // Set the next machine timer to fire.
-        let mtimecmp = 0x0200_4000 as *mut u64;
-        let mtime = 0x0200_bff8 as *const u64;
+        let mtimecmp = phys_to_virt(PhysAddr::new_trunc(0x0200_4000)).as_ptr_mut::<u64>();
+        let mtime = phys_to_virt(PhysAddr::new_trunc(0x0200_bff8)).as_ptr::<u64>();
         // The frequency given by QEMU is 10_000_000 Hz, so this sets
         // the next interrupt to fire one second from now.
         mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
@@ -263,8 +263,8 @@ pub extern "C" fn mtrap(
             }
             7 => unsafe {
                 // Machine timer
-                let mtimecmp = 0x0200_4000 as *mut u64;
-                let mtime = 0x0200_bff8 as *const u64;
+                let mtimecmp = phys_to_virt(PhysAddr::new_trunc(0x0200_4000)).as_ptr_mut::<u64>();
+                let mtime = phys_to_virt(PhysAddr::new_trunc(0x0200_bff8)).as_ptr::<u64>();
                 // The frequency given by QEMU is 10_000_000 Hz, so this sets
                 // the next interrupt to fire one second from now.
                 mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
