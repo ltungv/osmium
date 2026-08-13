@@ -5,7 +5,7 @@ pub mod vpn;
 mod frame;
 mod heap;
 
-use core::alloc::Layout;
+use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
@@ -13,7 +13,7 @@ use crate::{
     addr::{PhysAddr, VirtAddr, phys_to_virt},
     mem::{
         frame::BuddyAlloc,
-        heap::LockedLinkedHeap,
+        heap::LinkedHeap,
         page::{MappedPageTable, PteFlags},
     },
     uart,
@@ -21,10 +21,21 @@ use crate::{
 
 static FRAME_ALLOC: spin::Mutex<BuddyAlloc> = spin::Mutex::new(BuddyAlloc::new());
 
+static KHEAP: spin::Mutex<LinkedHeap> = spin::Mutex::new(LinkedHeap::new());
+
 static PAGE_TABLE: spin::Mutex<MappedPageTable<'static>> = spin::Mutex::new(MappedPageTable::new());
 
-#[global_allocator]
-static KHEAP: LockedLinkedHeap = LockedLinkedHeap::new();
+pub fn frame_allocator() -> &'static spin::Mutex<BuddyAlloc> {
+    &FRAME_ALLOC
+}
+
+pub fn kheap() -> &'static spin::Mutex<LinkedHeap> {
+    &KHEAP
+}
+
+pub fn page_table() -> &'static spin::Mutex<MappedPageTable<'static>> {
+    &PAGE_TABLE
+}
 
 pub fn init_frame_allocator() {
     let mut allocator = FRAME_ALLOC.lock();
@@ -33,15 +44,31 @@ pub fn init_frame_allocator() {
     }
 }
 
-pub fn init_page_table() {
-    let (kheap_start, kheap_end) = { (KHEAP.start_addr(), KHEAP.end_addr()) };
+pub fn init_kheap() {
     let mut allocator = FRAME_ALLOC.lock();
-    let mut page_table = PAGE_TABLE.lock();
+    let ppn = allocator
+        .alloc(6)
+        .expect("device should have memory for the kernel's heap");
+
     unsafe {
-        page_table
-            .init(&mut allocator)
-            .expect("kernel's page table should have been initialized");
+        KHEAP.lock().init(ppn, PAGE_SIZE * (1 << 6));
     }
+}
+
+pub fn init_page_table() {
+    let (kheap_start, kheap_end) = {
+        let kheap = KHEAP.lock();
+        (kheap.start_addr(), kheap.end_addr())
+    };
+
+    let mut allocator = FRAME_ALLOC.lock();
+    let ppn = allocator
+        .alloc(0)
+        .expect("device should have memory for the root page table");
+
+    let mut page_table = PAGE_TABLE.lock();
+    unsafe { page_table.init(ppn) }
+
     // SAFETY: the linker-script symbols below are valid addresses
     // provided by the linker and represent the kernel's memory layout.
     unsafe {
@@ -52,7 +79,7 @@ pub fn init_page_table() {
                 PteFlags::R | PteFlags::W,
                 &mut allocator,
             )
-            .expect("`HEAP` memory section should be mapped");
+            .expect("`HEAP` memory region should be mapped");
 
         page_table
             .map_range(
@@ -61,7 +88,7 @@ pub fn init_page_table() {
                 PteFlags::R | PteFlags::X,
                 &mut allocator,
             )
-            .expect("`TEXT` memory section should be mapped");
+            .expect("`TEXT` memory region should be mapped");
 
         page_table
             .map_range(
@@ -70,7 +97,7 @@ pub fn init_page_table() {
                 PteFlags::R | PteFlags::X,
                 &mut allocator,
             )
-            .expect("`RODATA` memory section should be mapped");
+            .expect("`RODATA` memory region should be mapped");
 
         page_table
             .map_range(
@@ -79,7 +106,7 @@ pub fn init_page_table() {
                 PteFlags::R | PteFlags::W,
                 &mut allocator,
             )
-            .expect("`DATA` memory section should be mapped");
+            .expect("`DATA` memory region should be mapped");
 
         page_table
             .map_range(
@@ -88,7 +115,7 @@ pub fn init_page_table() {
                 PteFlags::R | PteFlags::W,
                 &mut allocator,
             )
-            .expect("`BSS` memory section should be mapped");
+            .expect("`BSS` memory region should be mapped");
 
         page_table
             .map_range(
@@ -97,7 +124,7 @@ pub fn init_page_table() {
                 PteFlags::R | PteFlags::W,
                 &mut allocator,
             )
-            .expect("`KERNEL_STACK` memory section should be mapped");
+            .expect("`KERNEL_STACK` memory region should be mapped");
     }
 
     page_table
@@ -107,7 +134,7 @@ pub fn init_page_table() {
             PteFlags::R | PteFlags::W,
             &mut allocator,
         )
-        .expect("16550 UART device addresses should be mapped");
+        .expect("16550 UART device memory region should be mapped");
 
     page_table
         .map_range(
@@ -116,30 +143,22 @@ pub fn init_page_table() {
             PteFlags::R | PteFlags::W,
             &mut allocator,
         )
-        .expect("`KERNEL_HEAP` memory section should be mapped");
+        .expect("kernel's memory region should be mapped");
 }
 
-pub fn init_kheap() {
-    let mut allocator = FRAME_ALLOC.lock();
-    let ppn = allocator
-        .alloc(6)
-        .expect("device should have enough memory for the kernel's heap");
+#[global_allocator]
+static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator;
 
-    let heap_start = unsafe { phys_to_virt(ppn.addr()).as_ptr_mut::<u8>() as usize };
-    let heap_size = PAGE_SIZE * (1 << 6);
-    KHEAP.init(heap_start, heap_size);
-}
+struct GlobalAllocator;
 
-pub fn frame_allocator() -> &'static spin::Mutex<BuddyAlloc> {
-    &FRAME_ALLOC
-}
+unsafe impl GlobalAlloc for GlobalAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe { KHEAP.lock().alloc(layout) }
+    }
 
-pub fn page_table() -> &'static spin::Mutex<page::MappedPageTable<'static>> {
-    &PAGE_TABLE
-}
-
-pub fn kheap() -> &'static LockedLinkedHeap {
-    &KHEAP
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { KHEAP.lock().dealloc(ptr, layout) }
+    }
 }
 
 #[alloc_error_handler]
