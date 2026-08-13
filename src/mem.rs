@@ -51,7 +51,9 @@ pub fn init_kheap() {
         .expect("device should have memory for the kernel's heap");
 
     unsafe {
-        KHEAP.lock().init(ppn, PAGE_SIZE * (1 << 6));
+        KHEAP
+            .lock()
+            .init(phys_to_virt(ppn.addr()), PAGE_SIZE * (1 << 6));
     }
 }
 
