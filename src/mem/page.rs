@@ -7,35 +7,40 @@ use bitflags::bitflags;
 use crate::{
     Error, PAGE_SIZE,
     addr::{self, PhysAddr, VirtAddr},
-    mem::{buddy::BuddyAlloc, ppn::PhysPageNumber, vpn::VirtPageNumber},
+    mem::{frame::BuddyAlloc, ppn::PhysPageNumber, vpn::VirtPageNumber},
 };
 
 pub struct MappedPageTable<'t> {
-    ppn: PhysPageNumber,
+    ppn: Option<PhysPageNumber>,
     _phantom: PhantomData<&'t mut PageTable>,
 }
 
 impl MappedPageTable<'static> {
     pub const fn new() -> Self {
         Self {
-            ppn: PhysPageNumber::new_trunc(0),
+            ppn: None,
             _phantom: PhantomData,
         }
     }
 
-    pub unsafe fn init(&mut self, allocator: &mut BuddyAlloc) -> Result<(), Error> {
-        self.ppn = PageTable::alloc(allocator)?;
-        Ok(())
+    pub unsafe fn init(&mut self, ppn: PhysPageNumber) {
+        PageTable::init(ppn);
+        self.ppn = Some(ppn);
     }
 }
 
 impl MappedPageTable<'_> {
     pub const fn satp(&self) -> usize {
-        8 << 60 | self.ppn.get()
+        let ppn = if let Some(ppn) = self.ppn {
+            ppn.get()
+        } else {
+            0
+        };
+        8 << 60 | ppn
     }
 
     pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let page_table = unsafe { &*PageTable::ptr_from_ppn(self.ppn) };
+        let page_table = unsafe { &*PageTable::ptr_from_ppn(self.ppn?) };
         page_table.translate(vaddr)
     }
 
@@ -46,7 +51,7 @@ impl MappedPageTable<'_> {
         flags: PteFlags,
         allocator: &mut BuddyAlloc,
     ) -> Result<(), Error> {
-        let page_table = unsafe { &mut *PageTable::ptr_mut_from_ppn(self.ppn) };
+        let page_table = unsafe { self.page_table().ok_or(Error::InvalidState)? };
         let vpn_start = start.align_down(PAGE_SIZE).page_number();
         let vpn_end = end.align_up(PAGE_SIZE).page_number();
         let len = vpn_end - vpn_start;
@@ -56,6 +61,11 @@ impl MappedPageTable<'_> {
             page_table.map(vpn, ppn, flags, 0, allocator)?;
         }
         Ok(())
+    }
+
+    unsafe fn page_table(&mut self) -> Option<&mut PageTable> {
+        self.ppn
+            .map(|ppn| unsafe { &mut *PageTable::ptr_mut_from_ppn(ppn) })
     }
 }
 
@@ -140,15 +150,13 @@ impl PageTable {
         None
     }
 
-    fn alloc(allocator: &mut BuddyAlloc) -> Result<PhysPageNumber, Error> {
-        let ppn = allocator.alloc(0).ok_or(Error::OutOfMemory)?;
+    fn init(ppn: PhysPageNumber) {
         let ptr = Self::ptr_mut_from_ppn(ppn).cast::<PageTableEntry>();
         for i in 0..PAGE_SIZE / size_of::<PageTableEntry>() {
             unsafe {
                 ptr.add(i).write(PageTableEntry::default());
             }
         }
-        Ok(ppn)
     }
 
     fn create<'e>(
@@ -156,7 +164,8 @@ impl PageTable {
         allocator: &mut BuddyAlloc,
     ) -> Result<&'e mut Self, Error> {
         if !pte.flags().contains(PteFlags::V) {
-            let ppn = Self::alloc(allocator)?;
+            let ppn = allocator.alloc(0).ok_or(Error::OutOfMemory)?;
+            Self::init(ppn);
             pte.set_ppn(ppn);
             pte.set_flags(PteFlags::V);
         }

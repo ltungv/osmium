@@ -112,24 +112,24 @@ pub extern "C" fn kmain() {
         let v2: Vec<u8> = Vec::with_capacity(8);
         let v3: Vec<u8> = Vec::with_capacity(8);
         println!("allocated v1 v2 v3");
-        kheap().debug_print();
+        kheap().lock().debug_print();
         println!("-------------------------------");
 
         drop(v2);
         println!("dropped v2");
-        kheap().debug_print();
+        kheap().lock().debug_print();
         println!("-------------------------------");
 
         let v4: Vec<u8> = Vec::with_capacity(64);
         println!("allocated v4");
-        kheap().debug_print();
+        kheap().lock().debug_print();
         println!("-------------------------------");
 
         drop(v1);
         drop(v3);
         drop(v4);
         println!("dropped v1 v3 v4");
-        kheap().debug_print();
+        kheap().lock().debug_print();
     }
     println!("triggering faults...");
     unsafe {
@@ -289,6 +289,9 @@ fn abort() -> ! {
 /// Errors that occur when working with the page table.
 #[derive(Debug)]
 pub enum Error {
+    /// The kernel and/or its subsystems are in an invalid state.
+    InvalidState,
+
     /// There's no memory left on the device for the kernel.
     OutOfMemory,
 }
@@ -298,6 +301,7 @@ impl core::error::Error for Error {}
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::InvalidState => write!(f, "invalid state"),
             Self::OutOfMemory => write!(f, "out of memory"),
         }
     }
