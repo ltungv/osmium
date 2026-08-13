@@ -16,12 +16,16 @@ pub struct MappedPageTable<'t> {
 }
 
 impl MappedPageTable<'static> {
-    pub fn new(allocator: &mut BuddyAlloc) -> Result<Self, Error> {
-        let ppn = PageTable::alloc(allocator)?;
-        Ok(Self {
-            ppn,
+    pub const fn new() -> Self {
+        Self {
+            ppn: PhysPageNumber::new_trunc(0),
             _phantom: PhantomData,
-        })
+        }
+    }
+
+    pub unsafe fn init(&mut self, allocator: &mut BuddyAlloc) -> Result<(), Error> {
+        self.ppn = PageTable::alloc(allocator)?;
+        Ok(())
     }
 }
 

@@ -1,331 +1,170 @@
-//! Sub-page level, malloc-like allocation system
-
-use core::{marker::PhantomData, mem::size_of, ptr::NonNull};
-
-use crate::{
-    PAGE_SIZE,
-    addr::{VirtAddr, phys_to_virt},
-    mem::buddy::BuddyAlloc,
-    println,
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    ptr,
 };
 
-/// Number of pages used for the kernel heap allocator.
-pub const PAGE_COUNT: usize = 64;
+use crate::{addr::align_up, println};
 
-/// Metadata for the kernel's memory.
-pub struct Heap {
-    alloc_list: AllocationList,
-}
+pub struct LockedLinkedHeap(spin::Mutex<LinkedHeap>);
 
-impl Heap {
-    /// Initialize the kernel's memory.
-    pub fn new(allocator: &mut BuddyAlloc) -> Option<Self> {
-        let head_ppn = allocator.alloc(6)?;
-        let tail_ppn = head_ppn + PAGE_COUNT;
-
-        // SAFETY: `head_ppn.addr()` is the start of a freshly zero-allocated
-        // region of `PAGE_COUNT` frames. Writing an `AllocationNode` at this
-        // address is valid because the region is large enough and the address
-        // is 4096-byte aligned (satisfies `AllocationNode`'s `usize` alignment).
-        let mut head =
-            unsafe { NodePtr::from_raw(phys_to_virt(head_ppn.addr()).as_ptr_mut::<AllocNode>()) };
-        let tail = unsafe { phys_to_virt(tail_ppn.addr()).as_ptr::<u8>() };
-
-        {
-            let node = head.as_mut();
-            *node = AllocNode::default();
-            node.free();
-            node.set_size(PAGE_SIZE * PAGE_COUNT);
-        }
-
-        let alloc_list = AllocationList { head, tail };
-        Some(Self { alloc_list })
+impl LockedLinkedHeap {
+    pub const fn new() -> Self {
+        Self(spin::Mutex::new(LinkedHeap::new()))
     }
 
-    /// Get the memory address of the list head.
-    pub fn start(&self) -> VirtAddr {
-        VirtAddr::new_trunc(self.alloc_list.head.as_raw() as usize)
-    }
-
-    /// Get the memory address of the list tail.
-    pub fn end(&self) -> VirtAddr {
-        VirtAddr::new_trunc(self.alloc_list.tail as usize)
-    }
-
-    /// Allocate `size` bytes (8-byte aligned).
-    pub fn alloc(&self, size: usize) -> Option<*mut u8> {
-        let mask = 0b111;
-        let aligned_size = (size + mask) & !mask;
-
-        let size = aligned_size + size_of::<AllocNode>();
-        let tail = self.alloc_list.tail;
-
-        for mut node_ptr in self.alloc_list.iter_nodes() {
-            let node = node_ptr.as_mut();
-            let node_size = node.get_size();
-            if node.is_free() && size <= node_size {
-                node.take();
-                let node_remaining = node_size - size;
-                if node_remaining > size_of::<AllocNode>() {
-                    node.set_size(size);
-                    // Splitting: initialise the remainder as a free node.
-                    if let Some(mut next) = node_ptr.next(tail) {
-                        let next_node = next.as_mut();
-                        next_node.free();
-                        next_node.set_size(node_remaining);
-                    }
-                } else {
-                    node.set_size(node_size);
-                }
-                return Some(node_ptr.user_ptr());
-            }
-        }
-        None
-    }
-
-    /// Allocate sub-page level allocation based on bytes and zero the memory.
-    pub fn zalloc(&self, size: usize) -> Option<*mut u8> {
-        let addr = self.alloc(size)?;
-        // SAFETY: `addr` points to `size` bytes of usable payload inside the
-        // heap region, as returned by `alloc` above.
+    pub fn init(&self, heap_start: usize, heap_size: usize) {
+        let mut heap = self.0.lock();
         unsafe {
-            core::ptr::write_bytes(addr, 0, size);
-        }
-        Some(addr)
-    }
-
-    /// Deallocate the node starting at `ptr`.
-    pub fn dealloc(&self, ptr: *mut u8) {
-        if ptr.is_null() {
-            return;
-        }
-        // SAFETY: `ptr` was returned by a prior `alloc`/`zalloc` and has not
-        // been deallocated yet — the caller (`GlobalAlloc::dealloc`) guarantees
-        // this per its own safety contract.
-        let mut node_ptr = unsafe { NodePtr::from_user_ptr(ptr) };
-        let node = node_ptr.as_mut();
-        if node.is_taken() {
-            node.free();
-        }
-        self.coalesce();
-    }
-
-    /// Merge adjacent free chunks into a bigger chunk.
-    pub fn coalesce(&self) {
-        let tail = self.alloc_list.tail;
-        let mut current = Some(self.alloc_list.head);
-
-        while let Some(mut node_ptr) = current {
-            // Extract data from the mutable borrow before using `node_ptr`
-            // again (for `.next()`), to avoid overlapping borrows.
-            let size = node_ptr.as_ref().get_size();
-            let is_free = node_ptr.as_ref().is_free();
-            if size == 0 {
-                break;
-            }
-            let Some(next_ptr) = node_ptr.next(tail) else {
-                break;
-            };
-            if is_free && next_ptr.as_ref().is_free() {
-                let next_size = next_ptr.as_ref().get_size();
-                node_ptr.as_mut().set_size(size + next_size);
-                // Don't advance — the merged node may coalesce further.
-                current = Some(node_ptr);
-            } else {
-                current = Some(next_ptr);
-            }
+            heap.init(heap_start, heap_size);
         }
     }
 
     pub fn debug_print(&self) {
-        self.alloc_list.debug_print();
+        self.0.lock().debug_print();
+    }
+
+    pub fn start_addr(&self) -> usize {
+        let heap = self.0.lock();
+        heap.addr
+    }
+
+    pub fn end_addr(&self) -> usize {
+        let heap = self.0.lock();
+        heap.addr + heap.size
     }
 }
 
-/// A contiguous sequence of allocation nodes spanning the kernel heap region.
-///
-/// `head` points to the first `AllocationNode`. `tail` is a one-past-end
-/// sentinel (never dereferenced) used to stop iteration.
-struct AllocationList {
-    head: NodePtr,
-    tail: *const u8,
-}
-
-// SAFETY: `AllocationList` contains a `NodePtr` (see its `Send` impl) and a
-// `*const u8` tail sentinel that is never dereferenced — only compared.
-// The underlying heap memory is `'static` and access is serialised by the
-// `SpinMutex` that guards `Allocator`.
-unsafe impl Send for AllocationList {}
-
-impl AllocationList {
-    /// Return an iterator over all nodes in the list.
-    const fn iter_nodes(&self) -> NodeIter<'_> {
-        NodeIter {
-            curr: Some(self.head),
-            tail: self.tail,
-            _phantom: PhantomData,
+unsafe impl GlobalAlloc for LockedLinkedHeap {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let (size, align) = LinkedHeap::size_align(layout);
+        let mut allocator = self.0.lock();
+        if let Some((region, alloc_start)) = allocator.find(size, align) {
+            let alloc_end = alloc_start.checked_add(size).expect("overflow");
+            let excess_size = region.end_addr() - alloc_end;
+            if excess_size > 0 {
+                unsafe {
+                    allocator.push(alloc_end, excess_size);
+                }
+            }
+            alloc_start as *mut u8
+        } else {
+            ptr::null_mut()
         }
     }
 
-    fn debug_print(&self) {
-        for node_ptr in self.iter_nodes() {
-            let node = node_ptr.as_ref();
-            println!(
-                "{:p}: Length = {:<10} Taken = {}",
-                node_ptr.as_raw(),
-                node.get_size(),
-                node.is_taken()
-            );
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let (size, _) = LinkedHeap::size_align(layout);
+        unsafe { self.0.lock().push(ptr as usize, size) }
+    }
+}
+
+struct LinkedHeap {
+    addr: usize,
+    size: usize,
+    head: Node,
+}
+
+impl LinkedHeap {
+    pub const fn new() -> Self {
+        Self {
+            addr: 0,
+            size: 0,
+            head: Node::new(0),
         }
     }
-}
 
-/// An iterator over the allocation nodes in an [`AllocationList`].
-///
-/// The `PhantomData<&'a AllocationList>` borrows the list so the iterator
-/// cannot outlive the list it was created from.
-struct NodeIter<'a> {
-    curr: Option<NodePtr>,
-    tail: *const u8,
-    _phantom: PhantomData<&'a AllocationList>,
-}
-
-impl Iterator for NodeIter<'_> {
-    type Item = NodePtr;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let node_ptr = self.curr?;
-        self.curr = node_ptr.next(self.tail);
-        Some(node_ptr)
-    }
-}
-
-/// A non-null pointer to an [`AllocNode`] within the kernel heap region.
-///
-/// Constructing a `NodePtr` is unsafe because the caller must ensure that the pointer points to a
-/// valid and aligned [`AllocNode`] *within* the kernel's heap region.
-#[derive(Clone, Copy)]
-struct NodePtr(NonNull<AllocNode>);
-
-impl NodePtr {
-    /// Create a `NodePtr` from a raw pointer.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` must be non-null, properly aligned for `AllocationNode`, and
-    /// point to a valid, initialized `AllocationNode` that resides within
-    /// the kernel heap region for its entire lifetime (`'static`).
-    const unsafe fn from_raw(ptr: *mut AllocNode) -> Self {
-        // SAFETY: caller guarantees `ptr` is non-null.
-        Self(unsafe { NonNull::new_unchecked(ptr) })
+    pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
+        self.addr = heap_start;
+        self.size = heap_size;
+        unsafe {
+            self.push(heap_start, heap_size);
+        }
     }
 
-    /// Recover the `NodePtr` for the header that precedes a user payload
-    /// pointer returned by [`Allocator::alloc`].
-    ///
-    /// # Safety
-    ///
-    /// `user_ptr` must have been returned by a prior successful call to
-    /// `Allocator::alloc`/`zalloc` and must not have been deallocated yet.
-    #[allow(clippy::cast_ptr_alignment)]
-    const unsafe fn from_user_ptr(user_ptr: *mut u8) -> Self {
-        // SAFETY: the user pointer is `sizeof(AllocationNode)` bytes past the
-        // header. Subtracting one `AllocationNode` recovers the header address.
-        // The caller guarantees `user_ptr` originates from `alloc`, so this
-        // pointer is valid, aligned, and inside the heap region.
-        let header = unsafe { user_ptr.cast::<AllocNode>().sub(1) };
-        // SAFETY: `header` satisfies all `from_raw` preconditions per above.
-        unsafe { Self::from_raw(header) }
+    pub fn debug_print(&self) {
+        let mut next = &self.head.next;
+        while let Some(curr) = next {
+            println!("{:p} - {} bytes", curr, curr.size);
+            next = &curr.next;
+        }
     }
 
-    /// Compute the pointer to the next node in the allocation list.
-    ///
-    /// Returns `None` if the next node would be at or past `tail`.
-    #[allow(clippy::cast_ptr_alignment)]
-    fn next(self, tail: *const u8) -> Option<Self> {
-        let size = self.as_ref().get_size();
-        if size == 0 {
+    fn find(&mut self, size: usize, align: usize) -> Option<(&'static mut Node, usize)> {
+        let mut prev = &mut self.head;
+        while let Some(curr) = prev.next.as_mut() {
+            if let Some(alloc_start) = Self::try_take_node(curr, size, align) {
+                let next = curr.next.take();
+                let ret = (prev.next.take().unwrap(), alloc_start);
+                prev.next = next;
+                return Some(ret);
+            }
+            prev = prev.next.as_mut().unwrap();
+        }
+        None
+    }
+
+    unsafe fn push(&mut self, addr: usize, size: usize) {
+        assert_eq!(
+            align_up(addr, align_of::<Node>()),
+            addr,
+            "address should be aligned to {}",
+            align_of::<Node>()
+        );
+        assert!(
+            size >= size_of::<Node>(),
+            "size should be at least {}",
+            size_of::<Node>()
+        );
+
+        let mut node = Node::new(size);
+        node.next = self.head.next.take();
+
+        let node_ptr = addr as *mut Node;
+        unsafe {
+            node_ptr.write(node);
+            self.head.next = Some(&mut *node_ptr);
+        }
+    }
+
+    fn try_take_node(node: &Node, size: usize, align: usize) -> Option<usize> {
+        let alloc_start = align_up(node.start_addr(), align);
+        let alloc_end = alloc_start.checked_add(size)?;
+        if alloc_end > node.end_addr() {
             return None;
         }
-        // SAFETY: `self.0` points inside the heap region and `size` is the
-        // total block size stored in the header. Adding `size` bytes yields
-        // either the next valid header or the one-past-end sentinel (`tail`).
-        let next_ptr = unsafe { self.0.as_ptr().cast::<u8>().add(size) };
-        if next_ptr.cast_const() >= tail {
+        let rem = node.end_addr() - alloc_end;
+        if rem > 0 && rem < size_of::<Node>() {
             return None;
         }
-        // SAFETY: `next_ptr` is within the heap region (below `tail`) and
-        // points to the start of the next `AllocationNode` header, which was
-        // properly initialised when the region was split during allocation.
-        Some(unsafe { Self::from_raw(next_ptr.cast::<AllocNode>()) })
+        Some(alloc_start)
     }
 
-    /// Immutable reference to the underlying `AllocationNode`.
-    const fn as_ref(&self) -> &AllocNode {
-        // SAFETY: the invariant on `NodePtr` guarantees the pointer is valid,
-        // aligned, and the node is initialised for the `'static` lifetime.
-        unsafe { self.0.as_ref() }
-    }
+    fn size_align(layout: Layout) -> (usize, usize) {
+        let layout = layout
+            .align_to(align_of::<Node>())
+            .expect("adjusting alignment failed")
+            .pad_to_align();
 
-    /// Mutable reference to the underlying `AllocationNode`.
-    const fn as_mut(&mut self) -> &mut AllocNode {
-        // SAFETY: same as `as_ref`. Exclusive access is ensured by requiring
-        // `&mut self` and the `SpinMutex` that guards the `Allocator`.
-        unsafe { self.0.as_mut() }
-    }
-
-    /// Return the raw pointer.
-    const fn as_raw(self) -> *const AllocNode {
-        self.0.as_ptr()
-    }
-
-    /// Return the user-facing payload pointer (one `AllocationNode` past the header).
-    const fn user_ptr(self) -> *mut u8 {
-        // SAFETY: adding 1 to an `AllocationNode` pointer yields the payload
-        // start, which is within the same allocation (header + payload).
-        unsafe { self.0.as_ptr().add(1).cast() }
+        let size = layout.size().max(size_of::<Node>());
+        (size, layout.align())
     }
 }
 
-/// Metadata for a region of byte-level allocation.
-#[derive(Default)]
-pub struct AllocNode(usize);
+struct Node {
+    size: usize,
+    next: Option<&'static mut Self>,
+}
 
-impl AllocNode {
-    /// Flag the current node as being taken.
-    pub const TAKEN_FLAG_MASK: usize = 1 << 63;
-
-    /// Clear the taken flag.
-    pub const fn free(&mut self) {
-        self.0 &= !Self::TAKEN_FLAG_MASK;
+impl Node {
+    const fn new(size: usize) -> Self {
+        Self { size, next: None }
     }
 
-    /// Return true if the node is free.
-    pub const fn is_free(&self) -> bool {
-        self.0 & Self::TAKEN_FLAG_MASK == 0
+    fn start_addr(&self) -> usize {
+        core::ptr::from_ref::<Self>(self) as usize
     }
 
-    /// Set the taken flag.
-    pub const fn take(&mut self) {
-        self.0 |= Self::TAKEN_FLAG_MASK;
-    }
-
-    /// Return true if the node is taken.
-    pub const fn is_taken(&self) -> bool {
-        self.0 & Self::TAKEN_FLAG_MASK == Self::TAKEN_FLAG_MASK
-    }
-
-    /// Set the node size.
-    pub const fn set_size(&mut self, size: usize) {
-        let is_taken = self.is_taken();
-        self.0 = size & !Self::TAKEN_FLAG_MASK;
-        if is_taken {
-            self.0 |= Self::TAKEN_FLAG_MASK;
-        }
-    }
-
-    /// Get the node size.
-    pub const fn get_size(&self) -> usize {
-        self.0 & !Self::TAKEN_FLAG_MASK
+    fn end_addr(&self) -> usize {
+        self.start_addr() + self.size
     }
 }
