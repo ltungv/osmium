@@ -28,7 +28,7 @@ use mem::frame_allocator;
 
 use crate::{
     addr::{PhysAddr, VirtAddr, phys_to_virt},
-    mem::{kheap, page::PteFlags, page_table},
+    mem::{kheap, page_table},
 };
 
 /// The size of a page in bytes.
@@ -87,90 +87,11 @@ unsafe extern "C" {
 /// being initialized properly, which can be a result of bugs or insufficient memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn kinit() -> usize {
-    let mut page_table = page_table().lock();
-    let (kheap_start, kheap_end) = {
-        let heap = kheap().lock();
-        (heap.start(), heap.end())
-    };
-
-    // SAFETY: the linker-script symbols below are valid addresses
-    // provided by the linker and represent the kernel's memory layout.
-    unsafe {
-        page_table
-            .map_range(
-                VirtAddr::new_trunc(HEAP_START),
-                VirtAddr::new_trunc(HEAP_START) + HEAP_SIZE,
-                PteFlags::R | PteFlags::W,
-                &mut frame_allocator().lock(),
-            )
-            .expect("`HEAP` memory section should be mapped");
-
-        page_table
-            .map_range(
-                VirtAddr::new_trunc(TEXT_START),
-                VirtAddr::new_trunc(TEXT_END),
-                PteFlags::R | PteFlags::X,
-                &mut frame_allocator().lock(),
-            )
-            .expect("`TEXT` memory section should be mapped");
-
-        page_table
-            .map_range(
-                VirtAddr::new_trunc(RODATA_START),
-                VirtAddr::new_trunc(RODATA_END),
-                PteFlags::R | PteFlags::X,
-                &mut frame_allocator().lock(),
-            )
-            .expect("`RODATA` memory section should be mapped");
-
-        page_table
-            .map_range(
-                VirtAddr::new_trunc(DATA_START),
-                VirtAddr::new_trunc(DATA_END),
-                PteFlags::R | PteFlags::W,
-                &mut frame_allocator().lock(),
-            )
-            .expect("`DATA` memory section should be mapped");
-
-        page_table
-            .map_range(
-                VirtAddr::new_trunc(BSS_START),
-                VirtAddr::new_trunc(BSS_END),
-                PteFlags::R | PteFlags::W,
-                &mut frame_allocator().lock(),
-            )
-            .expect("`BSS` memory section should be mapped");
-
-        page_table
-            .map_range(
-                VirtAddr::new_trunc(KERNEL_STACK_START),
-                VirtAddr::new_trunc(KERNEL_STACK_END),
-                PteFlags::R | PteFlags::W,
-                &mut frame_allocator().lock(),
-            )
-            .expect("`KERNEL_STACK` memory section should be mapped");
-    }
-
-    page_table
-        .map_range(
-            phys_to_virt(uart::QEMU_ADDR),
-            phys_to_virt(uart::QEMU_ADDR) + 256,
-            PteFlags::R | PteFlags::W,
-            &mut frame_allocator().lock(),
-        )
-        .expect("16550 UART device addresses should be mapped");
-
-    page_table
-        .map_range(
-            kheap_start,
-            kheap_end,
-            PteFlags::R | PteFlags::W,
-            &mut frame_allocator().lock(),
-        )
-        .expect("`KERNEL_HEAP` memory section should be mapped");
-
+    mem::init_frame_allocator();
+    mem::init_kheap();
+    mem::init_page_table();
     frame_allocator().lock().debug_print();
-    page_table.satp()
+    page_table().lock().satp()
 }
 
 /// Kernel main runtime.
@@ -191,22 +112,24 @@ pub extern "C" fn kmain() {
         let v2: Vec<u8> = Vec::with_capacity(8);
         let v3: Vec<u8> = Vec::with_capacity(8);
         println!("allocated v1 v2 v3");
-        kheap().lock().debug_print();
+        kheap().debug_print();
         println!("-------------------------------");
 
         drop(v2);
         println!("dropped v2");
-        kheap().lock().debug_print();
+        kheap().debug_print();
         println!("-------------------------------");
 
         let v4: Vec<u8> = Vec::with_capacity(64);
         println!("allocated v4");
-        kheap().lock().debug_print();
+        kheap().debug_print();
         println!("-------------------------------");
 
         drop(v1);
         drop(v3);
         drop(v4);
+        println!("dropped v1 v3 v4");
+        kheap().debug_print();
     }
     println!("triggering faults...");
     unsafe {
