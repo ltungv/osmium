@@ -12,7 +12,7 @@ const MAX_ORDER: usize = 12;
 pub struct BuddyAlloc {
     addr: PhysPageNumber,
     headers: &'static mut [Header],
-    free_list: [Link; MAX_ORDER + 1],
+    free_list: [Option<usize>; MAX_ORDER + 1],
 }
 
 impl BuddyAlloc {
@@ -20,7 +20,7 @@ impl BuddyAlloc {
         Self {
             addr: PhysPageNumber::new_trunc(0),
             headers: &mut [],
-            free_list: [const { Link::new() }; MAX_ORDER + 1],
+            free_list: [const { None }; MAX_ORDER + 1],
         }
     }
 
@@ -91,10 +91,10 @@ impl BuddyAlloc {
         let mut total_free_frames = 0;
         for order in (0..=MAX_ORDER).rev() {
             let mut free_blocks = 0;
-            let mut next = self.free_list[order].next;
+            let mut next = self.free_list[order];
             while let Some(curr) = next {
                 free_blocks += 1;
-                next = self.headers[curr].link.next;
+                next = self.headers[curr].next;
             }
             let free_frames = free_blocks * (1 << order);
             total_free_frames += free_frames;
@@ -112,9 +112,9 @@ impl BuddyAlloc {
 
     #[allow(clippy::cast_possible_truncation)]
     fn pop_free(&mut self, order: usize) -> Option<usize> {
-        let link = &mut self.free_list[order];
-        link.next.take().inspect(|&idx| {
-            link.next = self.headers[idx].link.next.take();
+        let next = &mut self.free_list[order];
+        next.take().inspect(|&idx| {
+            *next = self.headers[idx].next.take();
             self.headers[idx].order = order as u8;
             self.headers[idx].taken = true;
         })
@@ -122,33 +122,33 @@ impl BuddyAlloc {
 
     #[allow(clippy::cast_possible_truncation)]
     fn push_free(&mut self, order: usize, idx: usize) {
-        let link = &mut self.free_list[order];
-        self.headers[idx].link.next = link.next.replace(idx);
+        let next = &mut self.free_list[order];
+        self.headers[idx].next = next.replace(idx);
         self.headers[idx].order = order as u8;
         self.headers[idx].taken = false;
     }
 
     fn remove_free(&mut self, order: usize, idx: usize) {
         let mut prev: Option<usize> = None;
-        let mut next = self.free_list[order].next;
+        let mut next = self.free_list[order];
         while let Some(curr_idx) = next {
             if curr_idx == idx {
                 if let Some(prev_idx) = prev {
-                    self.headers[prev_idx].link.next = self.headers[curr_idx].link.next.take();
+                    self.headers[prev_idx].next = self.headers[curr_idx].next.take();
                 } else {
-                    self.free_list[order].next = self.headers[curr_idx].link.next.take();
+                    self.free_list[order] = self.headers[curr_idx].next.take();
                 }
                 break;
             }
             prev = Some(curr_idx);
-            next = self.headers[curr_idx].link.next;
+            next = self.headers[curr_idx].next;
         }
     }
 }
 
 #[derive(Default)]
 struct Header {
-    link: Link,
+    next: Option<usize>,
     order: u8,
     taken: bool,
 }
@@ -162,16 +162,5 @@ impl Header {
             }
         }
         unsafe { slice::from_raw_parts_mut(headers_ptr, len) }
-    }
-}
-
-#[derive(Default)]
-struct Link {
-    next: Option<usize>,
-}
-
-impl Link {
-    const fn new() -> Self {
-        Self { next: None }
     }
 }
