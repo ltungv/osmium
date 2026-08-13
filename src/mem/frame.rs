@@ -16,46 +16,33 @@ pub struct BuddyAlloc {
 }
 
 impl BuddyAlloc {
-    pub unsafe fn new(addr: PhysAddr, len: usize) -> Self {
-        let addr_start = addr.align_up(align_of::<Header>());
-        let addr_end = addr + len;
-
-        let useable_len = addr_end - addr_start;
-        let headers_ptr = unsafe { phys_to_virt(addr_start).as_ptr_mut::<Header>() };
-        let mut unprovisioned_frames = useable_len / (size_of::<Header>() + PAGE_SIZE);
-        for i in 0..unprovisioned_frames {
-            unsafe {
-                headers_ptr.add(i).write(Header::default());
-            }
+    pub const fn new() -> Self {
+        Self {
+            addr: PhysPageNumber::new_trunc(0),
+            headers: &mut [],
+            free_list: [const { Link::new() }; MAX_ORDER + 1],
         }
+    }
 
-        let headers = unsafe { slice::from_raw_parts_mut(headers_ptr, unprovisioned_frames) };
-        let addr = (addr_start + size_of_val(headers))
+    pub unsafe fn init(&mut self, addr: PhysAddr, len: usize) {
+        let header_start_addr = addr.align_up(align_of::<Header>());
+        let useable_len = addr + len - header_start_addr;
+        let mut unprovisioned_frames = useable_len / (size_of::<Header>() + PAGE_SIZE);
+
+        self.headers = Header::slice_from_ppn_mut(header_start_addr, unprovisioned_frames);
+        self.addr = (header_start_addr + size_of_val(self.headers))
             .align_up(PAGE_SIZE)
             .page_number();
-
-        let mut allocator = Self {
-            addr,
-            headers,
-            free_list: [const { Link::new() }; MAX_ORDER + 1],
-        };
 
         let mut frame_idx = 0;
         for order in (0..=MAX_ORDER).rev() {
             let nth_order_frames = 1 << order;
             while unprovisioned_frames >= nth_order_frames {
-                assert!(!allocator.headers[frame_idx].taken);
-                allocator.push_free(order, frame_idx);
-                allocator.headers[frame_idx].order = order
-                    .try_into()
-                    .expect("order should only be at most `MAX_EQUAL`");
-
+                self.push_free(order, frame_idx);
                 frame_idx += nth_order_frames;
                 unprovisioned_frames -= nth_order_frames;
             }
         }
-
-        allocator
     }
 
     pub fn alloc(&mut self, order: usize) -> Option<PhysPageNumber> {
@@ -63,20 +50,10 @@ impl BuddyAlloc {
             let Some(idx) = self.pop_free(o) else {
                 continue;
             };
-
             for o in (order..o).rev() {
                 let buddy_idx = idx ^ (1 << o);
                 self.push_free(o, buddy_idx);
-                self.headers[buddy_idx].order = o
-                    .try_into()
-                    .expect("order should only be at most `MAX_EQUAL`");
             }
-
-            self.headers[idx].taken = true;
-            self.headers[idx].order = order
-                .try_into()
-                .expect("order should only be at most `MAX_EQUAL`");
-
             return Some(self.addr + idx);
         }
         None
@@ -99,10 +76,6 @@ impl BuddyAlloc {
             order += 1;
         }
         self.push_free(order, idx);
-        self.headers[idx].taken = false;
-        self.headers[idx].order = order
-            .try_into()
-            .expect("order should only be at most `MAX_EQUAL`");
     }
 
     pub fn debug_print(&self) {
@@ -137,16 +110,22 @@ impl BuddyAlloc {
         );
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn pop_free(&mut self, order: usize) -> Option<usize> {
         let link = &mut self.free_list[order];
         link.next.take().inspect(|&idx| {
             link.next = self.headers[idx].link.next.take();
+            self.headers[idx].order = order as u8;
+            self.headers[idx].taken = true;
         })
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn push_free(&mut self, order: usize, idx: usize) {
         let link = &mut self.free_list[order];
         self.headers[idx].link.next = link.next.replace(idx);
+        self.headers[idx].order = order as u8;
+        self.headers[idx].taken = false;
     }
 
     fn remove_free(&mut self, order: usize, idx: usize) {
@@ -172,6 +151,18 @@ struct Header {
     link: Link,
     order: u8,
     taken: bool,
+}
+
+impl Header {
+    fn slice_from_ppn_mut(addr: PhysAddr, len: usize) -> &'static mut [Self] {
+        let headers_ptr = unsafe { phys_to_virt(addr).as_ptr_mut::<Self>() };
+        for i in 0..len {
+            unsafe {
+                headers_ptr.add(i).write(Self::default());
+            }
+        }
+        unsafe { slice::from_raw_parts_mut(headers_ptr, len) }
+    }
 }
 
 #[derive(Default)]
