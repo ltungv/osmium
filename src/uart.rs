@@ -34,7 +34,7 @@ pub fn print(args: core::fmt::Arguments<'_>) {
     driver()
         .lock()
         .write_fmt(args)
-        .expect("Printing to serial failed");
+        .expect("16550 UART driver should print");
 }
 
 /// Get a reference to the global console connected to the default address of the UART device on

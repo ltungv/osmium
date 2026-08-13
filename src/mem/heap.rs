@@ -1,84 +1,41 @@
-use core::{
-    alloc::{GlobalAlloc, Layout},
-    ptr,
+use core::{alloc::Layout, ptr};
+
+use crate::{
+    addr::{align_up, phys_to_virt},
+    mem::ppn::PhysPageNumber,
+    println,
 };
 
-use crate::{addr::align_up, println};
-
-pub struct LockedLinkedHeap(spin::Mutex<LinkedHeap>);
-
-impl LockedLinkedHeap {
-    pub const fn new() -> Self {
-        Self(spin::Mutex::new(LinkedHeap::new()))
-    }
-
-    pub fn init(&self, heap_start: usize, heap_size: usize) {
-        let mut heap = self.0.lock();
-        unsafe {
-            heap.init(heap_start, heap_size);
-        }
-    }
-
-    pub fn debug_print(&self) {
-        self.0.lock().debug_print();
-    }
-
-    pub fn start_addr(&self) -> usize {
-        let heap = self.0.lock();
-        heap.addr
-    }
-
-    pub fn end_addr(&self) -> usize {
-        let heap = self.0.lock();
-        heap.addr + heap.size
-    }
-}
-
-unsafe impl GlobalAlloc for LockedLinkedHeap {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let (size, align) = LinkedHeap::size_align(layout);
-        let mut allocator = self.0.lock();
-        if let Some((region, alloc_start)) = allocator.find(size, align) {
-            let alloc_end = alloc_start.checked_add(size).expect("overflow");
-            let excess_size = region.end_addr() - alloc_end;
-            if excess_size > 0 {
-                unsafe {
-                    allocator.push(alloc_end, excess_size);
-                }
-            }
-            alloc_start as *mut u8
-        } else {
-            ptr::null_mut()
-        }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let (size, _) = LinkedHeap::size_align(layout);
-        unsafe { self.0.lock().push(ptr as usize, size) }
-    }
-}
-
-struct LinkedHeap {
+pub struct LinkedHeap {
+    head: Node,
     addr: usize,
     size: usize,
-    head: Node,
 }
 
 impl LinkedHeap {
     pub const fn new() -> Self {
         Self {
+            head: Node::new(0),
             addr: 0,
             size: 0,
-            head: Node::new(0),
         }
     }
 
-    pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
-        self.addr = heap_start;
-        self.size = heap_size;
+    pub unsafe fn init(&mut self, ppn: PhysPageNumber, size: usize) -> bool {
+        self.addr = unsafe { phys_to_virt(ppn.addr()).as_ptr_mut::<u8>() as usize };
+        self.size = size;
         unsafe {
-            self.push(heap_start, heap_size);
+            self.push(self.addr, self.size);
         }
+        true
+    }
+
+    pub const fn start_addr(&self) -> usize {
+        self.addr
+    }
+
+    pub const fn end_addr(&self) -> usize {
+        self.addr + self.size
     }
 
     pub fn debug_print(&self) {
@@ -89,18 +46,28 @@ impl LinkedHeap {
         }
     }
 
-    fn find(&mut self, size: usize, align: usize) -> Option<(&'static mut Node, usize)> {
-        let mut prev = &mut self.head;
-        while let Some(curr) = prev.next.as_mut() {
-            if let Some(alloc_start) = Self::try_take_node(curr, size, align) {
-                let next = curr.next.take();
-                let ret = (prev.next.take().unwrap(), alloc_start);
-                prev.next = next;
-                return Some(ret);
+    pub unsafe fn alloc(&mut self, layout: Layout) -> *mut u8 {
+        let (size, align) = Self::size_align(layout);
+        let Some((region, alloc_start)) = self.find(size, align) else {
+            return ptr::null_mut();
+        };
+
+        let alloc_end = alloc_start
+            .checked_add(size)
+            .expect("allocation should not overflow");
+
+        let excess_size = region.end_addr() - alloc_end;
+        if excess_size > 0 {
+            unsafe {
+                self.push(alloc_end, excess_size);
             }
-            prev = prev.next.as_mut().unwrap();
         }
-        None
+        alloc_start as *mut u8
+    }
+
+    pub unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+        let (size, _) = Self::size_align(layout);
+        unsafe { self.push(ptr as usize, size) }
     }
 
     unsafe fn push(&mut self, addr: usize, size: usize) {
@@ -126,6 +93,20 @@ impl LinkedHeap {
         }
     }
 
+    fn find(&mut self, size: usize, align: usize) -> Option<(&'static mut Node, usize)> {
+        let mut prev = &mut self.head;
+        while let Some(curr) = prev.next.as_mut() {
+            if let Some(alloc_start) = Self::try_take_node(curr, size, align) {
+                let next = curr.next.take();
+                let ret = (prev.next.take().unwrap(), alloc_start);
+                prev.next = next;
+                return Some(ret);
+            }
+            prev = prev.next.as_mut().unwrap();
+        }
+        None
+    }
+
     fn try_take_node(node: &Node, size: usize, align: usize) -> Option<usize> {
         let alloc_start = align_up(node.start_addr(), align);
         let alloc_end = alloc_start.checked_add(size)?;
@@ -142,7 +123,7 @@ impl LinkedHeap {
     fn size_align(layout: Layout) -> (usize, usize) {
         let layout = layout
             .align_to(align_of::<Node>())
-            .expect("adjusting alignment failed")
+            .expect("layout should be aligned")
             .pad_to_align();
 
         let size = layout.size().max(size_of::<Node>());
