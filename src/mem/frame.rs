@@ -16,7 +16,7 @@ pub struct BuddyAlloc {
 }
 
 impl BuddyAlloc {
-    pub const fn new() -> Self {
+    pub const fn empty() -> Self {
         Self {
             addr: PhysPageNumber::new_trunc(0),
             headers: &mut [],
@@ -26,11 +26,20 @@ impl BuddyAlloc {
 
     pub unsafe fn init(&mut self, addr: PhysAddr, len: usize) {
         let header_start_addr = addr.align_up(align_of::<Header>());
-        let useable_len = addr + len - header_start_addr;
-        let mut unprovisioned_frames = useable_len / (size_of::<Header>() + PAGE_SIZE);
+        let alloc_end_addr = addr
+            .checked_add(len)
+            .expect("allocator's end address should not overflow");
 
+        let useable_len = alloc_end_addr
+            .offset_from(header_start_addr)
+            .unwrap_or(0)
+            .saturating_sub(PAGE_SIZE - 1);
+
+        let mut unprovisioned_frames = useable_len / (size_of::<Header>() + PAGE_SIZE);
         self.headers = Header::slice_from_ppn_mut(header_start_addr, unprovisioned_frames);
-        self.addr = (header_start_addr + size_of_val(self.headers))
+        self.addr = header_start_addr
+            .checked_add(size_of_val(self.headers))
+            .expect("allocator headers' end address should not overflow")
             .align_up(PAGE_SIZE)
             .page_number();
 

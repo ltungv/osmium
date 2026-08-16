@@ -19,11 +19,12 @@ use crate::{
     uart,
 };
 
-static FRAME_ALLOC: spin::Mutex<BuddyAlloc> = spin::Mutex::new(BuddyAlloc::new());
+static FRAME_ALLOC: spin::Mutex<BuddyAlloc> = spin::Mutex::new(BuddyAlloc::empty());
 
-static KHEAP: spin::Mutex<LinkedHeap> = spin::Mutex::new(LinkedHeap::new());
+static KHEAP: spin::Mutex<LinkedHeap> = spin::Mutex::new(LinkedHeap::empty());
 
-static PAGE_TABLE: spin::Mutex<MappedPageTable<'static>> = spin::Mutex::new(MappedPageTable::new());
+static PAGE_TABLE: spin::Mutex<MappedPageTable<'static>> =
+    spin::Mutex::new(MappedPageTable::empty());
 
 pub fn frame_allocator() -> &'static spin::Mutex<BuddyAlloc> {
     &FRAME_ALLOC
@@ -50,19 +51,12 @@ pub fn init_kheap() {
         .alloc(6)
         .expect("device should have memory for the kernel's heap");
 
-    unsafe {
-        KHEAP
-            .lock()
-            .init(phys_to_virt(ppn.addr()), PAGE_SIZE * (1 << 6));
-    }
+    let mut kheap = KHEAP.lock();
+    unsafe { kheap.init(phys_to_virt(ppn.addr()), PAGE_SIZE * (1 << 6)) }
 }
 
 pub fn init_page_table() {
-    let (kheap_start, kheap_end) = {
-        let kheap = KHEAP.lock();
-        (kheap.start_addr(), kheap.end_addr())
-    };
-
+    let kheap_info = KHEAP.lock().info();
     let mut allocator = FRAME_ALLOC.lock();
     let ppn = allocator
         .alloc(0)
@@ -77,7 +71,7 @@ pub fn init_page_table() {
         page_table
             .map_range(
                 VirtAddr::new_trunc(HEAP_START),
-                VirtAddr::new_trunc(HEAP_START) + HEAP_SIZE,
+                VirtAddr::new_trunc(HEAP_START).wrapping_add(HEAP_SIZE),
                 PteFlags::R | PteFlags::W,
                 &mut allocator,
             )
@@ -131,8 +125,8 @@ pub fn init_page_table() {
 
     page_table
         .map_range(
-            phys_to_virt(uart::QEMU_ADDR),
-            phys_to_virt(uart::QEMU_ADDR) + 256,
+            unsafe { phys_to_virt(uart::QEMU_ADDR) },
+            unsafe { phys_to_virt(uart::QEMU_ADDR).wrapping_add(256) },
             PteFlags::R | PteFlags::W,
             &mut allocator,
         )
@@ -140,8 +134,8 @@ pub fn init_page_table() {
 
     page_table
         .map_range(
-            VirtAddr::new_trunc(kheap_start),
-            VirtAddr::new_trunc(kheap_end),
+            kheap_info.addr,
+            kheap_info.addr.wrapping_add(kheap_info.size),
             PteFlags::R | PteFlags::W,
             &mut allocator,
         )
@@ -155,11 +149,17 @@ struct GlobalAllocator;
 
 unsafe impl GlobalAlloc for GlobalAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { KHEAP.lock().alloc(layout) }
+        unsafe {
+            KHEAP
+                .lock()
+                .alloc(layout)
+                .map_or_else(core::ptr::null_mut, VirtAddr::as_ptr_mut)
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { KHEAP.lock().dealloc(ptr, layout) }
+        let addr = VirtAddr::new_trunc(ptr as usize);
+        unsafe { KHEAP.lock().dealloc(addr, layout) }
     }
 }
 
