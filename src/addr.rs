@@ -1,21 +1,21 @@
-use core::{fmt, ops};
+use core::fmt;
 
 use crate::{
     PAGE_SIZE,
     mem::{ppn::PhysPageNumber, vpn::VirtPageNumber},
 };
 
-pub const fn align_down(addr: usize, align: usize) -> usize {
+pub const fn align_down(x: usize, align: usize) -> usize {
     assert!(align.is_power_of_two(), "align must be a power of two");
-    addr & !(align - 1)
+    x & !(align - 1)
 }
 
-pub const fn align_up(addr: usize, align: usize) -> usize {
+pub const fn align_up(x: usize, align: usize) -> usize {
     assert!(align.is_power_of_two(), "align must be a power of two");
-    (addr + align - 1) & !(align - 1)
+    (x + align - 1) & !(align - 1)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysAddr(usize);
 
 impl PhysAddr {
@@ -26,28 +26,20 @@ impl PhysAddr {
         Self(addr & mask)
     }
 
-    pub const fn align_up(self, align: usize) -> Self {
-        Self::new_trunc(align_up(self.0, align))
-    }
-
     pub const fn page_number(self) -> PhysPageNumber {
         PhysPageNumber::new_trunc(self.0 / PAGE_SIZE)
     }
-}
 
-impl ops::Add<usize> for PhysAddr {
-    type Output = Self;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        Self(self.0 + rhs)
+    pub const fn offset_from(self, other: Self) -> Option<usize> {
+        self.0.checked_sub(other.0)
     }
-}
 
-impl ops::Sub<Self> for PhysAddr {
-    type Output = usize;
+    pub fn checked_add(self, len: usize) -> Option<Self> {
+        self.0.checked_add(len).map(Self)
+    }
 
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.0 - rhs.0
+    pub const fn align_up(self, align: usize) -> Self {
+        Self::new_trunc(align_up(self.0, align))
     }
 }
 
@@ -57,7 +49,7 @@ impl fmt::Pointer for PhysAddr {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtAddr(usize);
 
 impl VirtAddr {
@@ -68,8 +60,20 @@ impl VirtAddr {
         Self(addr & mask)
     }
 
-    pub const fn offset(self) -> usize {
+    pub const fn page_number(self) -> VirtPageNumber {
+        VirtPageNumber::new_trunc(self.0 / PAGE_SIZE)
+    }
+
+    pub const fn page_offset(self) -> usize {
         self.0 & (PAGE_SIZE - 1)
+    }
+
+    pub const fn offset_from(self, other: Self) -> usize {
+        self.0 - other.0
+    }
+
+    pub const fn wrapping_add(self, len: usize) -> Self {
+        Self(self.0.wrapping_add(len))
     }
 
     pub const fn align_down(self, align: usize) -> Self {
@@ -80,32 +84,12 @@ impl VirtAddr {
         Self::new_trunc(align_up(self.0, align))
     }
 
-    pub const fn page_number(self) -> VirtPageNumber {
-        VirtPageNumber::new_trunc(self.0 / PAGE_SIZE)
-    }
-
-    pub const unsafe fn as_ptr<T>(self) -> *const T {
+    pub const fn as_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
-    pub const unsafe fn as_ptr_mut<T>(self) -> *mut T {
+    pub const fn as_ptr_mut<T>(self) -> *mut T {
         self.0 as *mut T
-    }
-}
-
-impl ops::Add<usize> for VirtAddr {
-    type Output = Self;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        Self(self.0 + rhs)
-    }
-}
-
-impl ops::Sub<Self> for VirtAddr {
-    type Output = usize;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.0 - rhs.0
     }
 }
 
@@ -116,6 +100,6 @@ impl fmt::Pointer for VirtAddr {
 }
 
 #[inline]
-pub const fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
+pub const unsafe fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
     VirtAddr::new_trunc(paddr.0)
 }

@@ -16,7 +16,7 @@ pub struct MappedPageTable<'t> {
 }
 
 impl MappedPageTable<'static> {
-    pub const fn new() -> Self {
+    pub const fn empty() -> Self {
         Self {
             ppn: None,
             _phantom: PhantomData,
@@ -135,7 +135,7 @@ impl PageTable {
                 // is copied to PPN[1], VPN[0] is copied to PPN[0], and the page offset is copied,
                 // as normal.
                 let ppn = pte.translate(vpn, lvl);
-                let paddr = ppn.addr() + vaddr.offset();
+                let paddr = ppn.addr().checked_add(vaddr.page_offset())?;
                 return Some(paddr);
             }
             // At level 0, a valid non-leaf PTE means the table is malformed —
@@ -175,14 +175,14 @@ impl PageTable {
 
     #[inline]
     const fn ptr_from_ppn(ppn: PhysPageNumber) -> *const Self {
-        let vaddr = addr::phys_to_virt(ppn.addr());
-        unsafe { vaddr.as_ptr::<Self>() }
+        let vaddr = unsafe { addr::phys_to_virt(ppn.addr()) };
+        vaddr.as_ptr::<Self>()
     }
 
     #[inline]
     const fn ptr_mut_from_ppn(ppn: PhysPageNumber) -> *mut Self {
-        let vaddr = addr::phys_to_virt(ppn.addr());
-        unsafe { vaddr.as_ptr_mut::<Self>() }
+        let vaddr = unsafe { addr::phys_to_virt(ppn.addr()) };
+        vaddr.as_ptr_mut::<Self>()
     }
 }
 

@@ -106,6 +106,8 @@ pub extern "C" fn kmain() {
             .unwrap_or(PhysAddr::new_trunc(0));
 
         println!("{vaddr:p} --> {paddr:p}");
+        kheap().lock().debug_print();
+        println!("-------------------------------");
     }
     {
         let v1: Vec<u8> = Vec::with_capacity(8);
@@ -130,6 +132,17 @@ pub extern "C" fn kmain() {
         drop(v4);
         println!("dropped v1 v3 v4");
         kheap().lock().debug_print();
+        println!("-------------------------------");
+
+        let v5: Vec<u8> = Vec::with_capacity(1);
+        println!("allocated v5");
+        kheap().lock().debug_print();
+        println!("-------------------------------");
+
+        drop(v5);
+        println!("dropped v5");
+        kheap().lock().debug_print();
+        println!("-------------------------------");
     }
     println!("triggering faults...");
     unsafe {
