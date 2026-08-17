@@ -52,7 +52,7 @@ impl MappedPageTable<'_> {
         allocator: &mut BuddyAlloc,
     ) -> Result<(), Error> {
         let page_table = unsafe { self.page_table().ok_or(Error::InvalidState)? };
-        let vpn_start = start.align_down(PAGE_SIZE).page_number();
+        let vpn_start = start.page_number();
         let vpn_end = end.align_up(PAGE_SIZE).page_number();
         let len = vpn_end - vpn_start;
         for i in 0..len {

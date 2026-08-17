@@ -26,11 +26,10 @@ impl BuddyAlloc {
 
     pub unsafe fn init(&mut self, addr: PhysAddr, len: usize) {
         let header_start_addr = addr.align_up(align_of::<Header>());
-        let alloc_end_addr = addr.wrapping_add(len);
+        let alloc_end_addr = addr.wrapping_add(len).align_down(PAGE_SIZE);
         let useable_len = alloc_end_addr
             .offset_from(header_start_addr)
-            .unwrap_or(0)
-            .saturating_sub(PAGE_SIZE - 1);
+            .unwrap_or(0);
 
         let mut unprovisioned_frames = useable_len / (size_of::<Header>() + PAGE_SIZE);
         self.headers = Header::slice_from_ppn_mut(header_start_addr, unprovisioned_frames);
