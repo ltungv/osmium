@@ -34,8 +34,8 @@ impl PhysAddr {
         self.0.checked_sub(other.0)
     }
 
-    pub fn checked_add(self, len: usize) -> Option<Self> {
-        self.0.checked_add(len).map(Self)
+    pub const fn wrapping_add(self, len: usize) -> Self {
+        Self(self.0.wrapping_add(len))
     }
 
     pub const fn align_up(self, align: usize) -> Self {
@@ -66,10 +66,6 @@ impl VirtAddr {
 
     pub const fn page_offset(self) -> usize {
         self.0 & (PAGE_SIZE - 1)
-    }
-
-    pub const fn offset_from(self, other: Self) -> usize {
-        self.0 - other.0
     }
 
     pub const fn wrapping_add(self, len: usize) -> Self {
