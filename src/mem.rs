@@ -52,7 +52,12 @@ pub fn init_kheap() {
         .expect("device should have memory for the kernel's heap");
 
     let mut kheap = KHEAP.lock();
-    unsafe { kheap.init(phys_to_virt(ppn.addr()), PAGE_SIZE * (1 << 6)) }
+    unsafe {
+        kheap.init(
+            phys_to_virt(ppn.addr()).as_ptr_mut::<u8>(),
+            PAGE_SIZE * (1 << 6),
+        );
+    }
 }
 
 pub fn init_page_table() {
@@ -134,8 +139,8 @@ pub fn init_page_table() {
 
     page_table
         .map_range(
-            kheap_info.addr,
-            kheap_info.addr.wrapping_add(kheap_info.size),
+            VirtAddr::new_trunc(kheap_info.ptr as usize),
+            VirtAddr::new_trunc(kheap_info.ptr.wrapping_add(kheap_info.len) as usize),
             PteFlags::R | PteFlags::W,
             &mut allocator,
         )
@@ -153,13 +158,12 @@ unsafe impl GlobalAlloc for GlobalAllocator {
             KHEAP
                 .lock()
                 .alloc(layout)
-                .map_or_else(core::ptr::null_mut, VirtAddr::as_ptr_mut)
+                .unwrap_or_else(core::ptr::null_mut)
         }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let addr = VirtAddr::new_trunc(ptr as usize);
-        unsafe { KHEAP.lock().dealloc(addr, layout) }
+        unsafe { KHEAP.lock().dealloc(ptr, layout) }
     }
 }
 

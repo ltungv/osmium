@@ -26,10 +26,7 @@ impl BuddyAlloc {
 
     pub unsafe fn init(&mut self, addr: PhysAddr, len: usize) {
         let header_start_addr = addr.align_up(align_of::<Header>());
-        let alloc_end_addr = addr
-            .checked_add(len)
-            .expect("allocator's end address should not overflow");
-
+        let alloc_end_addr = addr.wrapping_add(len);
         let useable_len = alloc_end_addr
             .offset_from(header_start_addr)
             .unwrap_or(0)
@@ -38,8 +35,7 @@ impl BuddyAlloc {
         let mut unprovisioned_frames = useable_len / (size_of::<Header>() + PAGE_SIZE);
         self.headers = Header::slice_from_ppn_mut(header_start_addr, unprovisioned_frames);
         self.addr = header_start_addr
-            .checked_add(size_of_val(self.headers))
-            .expect("allocator headers' end address should not overflow")
+            .wrapping_add(size_of_val(self.headers))
             .align_up(PAGE_SIZE)
             .page_number();
 
@@ -130,14 +126,14 @@ impl BuddyAlloc {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    fn push_free(&mut self, order: usize, idx: usize) {
+    const fn push_free(&mut self, order: usize, idx: usize) {
         let next = &mut self.free_list[order];
         self.headers[idx].next = next.replace(idx);
         self.headers[idx].order = order as u8;
         self.headers[idx].taken = false;
     }
 
-    fn remove_free(&mut self, order: usize, idx: usize) {
+    const fn remove_free(&mut self, order: usize, idx: usize) {
         let mut prev: Option<usize> = None;
         let mut next = self.free_list[order];
         while let Some(curr_idx) = next {
