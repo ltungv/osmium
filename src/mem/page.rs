@@ -135,7 +135,7 @@ impl PageTable {
                 // is copied to PPN[1], VPN[0] is copied to PPN[0], and the page offset is copied,
                 // as normal.
                 let ppn = pte.translate(vpn, lvl);
-                let paddr = ppn.addr().checked_add(vaddr.page_offset())?;
+                let paddr = ppn.addr().wrapping_add(vaddr.page_offset());
                 return Some(paddr);
             }
             // At level 0, a valid non-leaf PTE means the table is malformed —
