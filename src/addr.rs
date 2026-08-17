@@ -38,6 +38,10 @@ impl PhysAddr {
         Self(self.0.wrapping_add(len))
     }
 
+    pub const fn align_down(self, align: usize) -> Self {
+        Self::new_trunc(align_down(self.0, align))
+    }
+
     pub const fn align_up(self, align: usize) -> Self {
         Self::new_trunc(align_up(self.0, align))
     }
