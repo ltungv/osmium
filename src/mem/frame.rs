@@ -65,7 +65,7 @@ impl BuddyAlloc {
     }
 
     pub fn dealloc(&mut self, ppn: PhysPageNumber) {
-        assert!(ppn >= self.addr);
+        assert!(ppn >= self.addr, "page number should be bounded");
         let mut idx = ppn - self.addr;
         let mut order = self.headers[idx].order as usize;
         while order < MAX_ORDER {
