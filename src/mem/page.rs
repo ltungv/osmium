@@ -83,7 +83,10 @@ impl PageTable {
         lvl: usize,
         allocator: &mut BuddyAlloc,
     ) -> Result<(), Error> {
-        assert!(flags.is_rwx());
+        assert!(
+            flags.is_rwx(),
+            "mapped page should be either readable, writeable, or executable"
+        );
         let indices = vpn.indices();
         let mut pte = &mut self.0[indices[2]];
         for &index_next in indices[lvl..2].iter().rev() {
