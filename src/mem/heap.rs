@@ -85,7 +85,7 @@ impl LinkedHeap {
                     while !cursor.try_insert_succeed(node) {
                         cursor = cursor
                             .next()
-                            .expect("cursor should not end before a list slot can be found");
+                            .expect("cursor should not end before a slot can be found");
                     }
                     (cursor, 2)
                 }
@@ -281,10 +281,7 @@ impl Cursor {
         let Self { mut prev, curr } = self;
         let node_info = unsafe { node.as_ref().info() };
         let curr_info = unsafe { curr.as_ref().info() };
-        assert!(
-            node_info.end() <= curr_info.ptr,
-            "free nodes should not overlap"
-        );
+        assert!(node_info.end() <= curr_info.ptr, "nodes should not overlap");
         unsafe {
             prev.as_mut().next = Some(node);
             node.as_mut().next = Some(self.curr);
@@ -301,15 +298,12 @@ impl Cursor {
             }
             assert!(
                 node_info.end() <= next.as_ptr().cast::<u8>(),
-                "free nodes should not overlap"
+                "nodes should not overlap"
             );
         }
         debug_assert!(self.curr < node, "list should be in order");
         let curr_info = unsafe { self.curr.as_ref().info() };
-        assert!(
-            curr_info.end() <= node_info.ptr,
-            "free nodes should not overlap"
-        );
+        assert!(curr_info.end() <= node_info.ptr, "nodes should not overlap");
         unsafe {
             node.as_mut().next = self.curr.as_mut().next.replace(node);
         }
