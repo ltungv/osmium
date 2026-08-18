@@ -44,7 +44,7 @@ impl MappedPageTable<'_> {
         page_table.translate(vaddr)
     }
 
-    pub fn map_range(
+    pub fn identity_map_range(
         &mut self,
         start: VirtAddr,
         end: VirtAddr,

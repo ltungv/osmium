@@ -74,7 +74,7 @@ pub fn init_page_table() {
     // provided by the linker and represent the kernel's memory layout.
     unsafe {
         page_table
-            .map_range(
+            .identity_map_range(
                 VirtAddr::new_trunc(HEAP_START),
                 VirtAddr::new_trunc(HEAP_START).wrapping_add(HEAP_SIZE),
                 PteFlags::R | PteFlags::W,
@@ -83,7 +83,7 @@ pub fn init_page_table() {
             .expect("`HEAP` memory region should be mapped");
 
         page_table
-            .map_range(
+            .identity_map_range(
                 VirtAddr::new_trunc(TEXT_START),
                 VirtAddr::new_trunc(TEXT_END),
                 PteFlags::R | PteFlags::X,
@@ -92,7 +92,7 @@ pub fn init_page_table() {
             .expect("`TEXT` memory region should be mapped");
 
         page_table
-            .map_range(
+            .identity_map_range(
                 VirtAddr::new_trunc(RODATA_START),
                 VirtAddr::new_trunc(RODATA_END),
                 PteFlags::R | PteFlags::X,
@@ -101,7 +101,7 @@ pub fn init_page_table() {
             .expect("`RODATA` memory region should be mapped");
 
         page_table
-            .map_range(
+            .identity_map_range(
                 VirtAddr::new_trunc(DATA_START),
                 VirtAddr::new_trunc(DATA_END),
                 PteFlags::R | PteFlags::W,
@@ -110,7 +110,7 @@ pub fn init_page_table() {
             .expect("`DATA` memory region should be mapped");
 
         page_table
-            .map_range(
+            .identity_map_range(
                 VirtAddr::new_trunc(BSS_START),
                 VirtAddr::new_trunc(BSS_END),
                 PteFlags::R | PteFlags::W,
@@ -119,7 +119,7 @@ pub fn init_page_table() {
             .expect("`BSS` memory region should be mapped");
 
         page_table
-            .map_range(
+            .identity_map_range(
                 VirtAddr::new_trunc(KERNEL_STACK_START),
                 VirtAddr::new_trunc(KERNEL_STACK_END),
                 PteFlags::R | PteFlags::W,
@@ -129,16 +129,16 @@ pub fn init_page_table() {
     }
 
     page_table
-        .map_range(
-            unsafe { phys_to_virt(uart::QEMU_ADDR) },
-            unsafe { phys_to_virt(uart::QEMU_ADDR).wrapping_add(256) },
+        .identity_map_range(
+            VirtAddr::new_trunc(uart::QEMU_ADDR),
+            VirtAddr::new_trunc(uart::QEMU_ADDR + 256),
             PteFlags::R | PteFlags::W,
             &mut allocator,
         )
         .expect("16550 UART device memory region should be mapped");
 
     page_table
-        .map_range(
+        .identity_map_range(
             VirtAddr::new_trunc(kheap_info.ptr as usize),
             VirtAddr::new_trunc(kheap_info.ptr.wrapping_add(kheap_info.len) as usize),
             PteFlags::R | PteFlags::W,

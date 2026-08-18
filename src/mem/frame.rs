@@ -26,8 +26,9 @@ impl BuddyAlloc {
 
     pub unsafe fn init(&mut self, addr: PhysAddr, len: usize) {
         let header_start_addr = addr.align_up(align_of::<Header>());
-        let alloc_end_addr = addr.wrapping_add(len).align_down(PAGE_SIZE);
-        let useable_len = alloc_end_addr
+        let alloc_end_ppn = addr.wrapping_add(len).page_number();
+        let useable_len = alloc_end_ppn
+            .addr()
             .offset_from(header_start_addr)
             .unwrap_or(0);
 

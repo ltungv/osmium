@@ -7,10 +7,8 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::addr::{PhysAddr, phys_to_virt};
-
 /// Address of the UART device on the `virt` machine in `QEMU`.
-pub const QEMU_ADDR: PhysAddr = PhysAddr::new_trunc(0x1000_0000);
+pub const QEMU_ADDR: usize = 0x1000_0000;
 
 static UART_16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
 
@@ -42,7 +40,7 @@ pub fn print(args: core::fmt::Arguments<'_>) {
 pub fn driver() -> &'static spin::Mutex<Uart16550> {
     UART_16550.call_once(|| {
         let mut uart = unsafe {
-            let addr = NonNull::new_unchecked(phys_to_virt(QEMU_ADDR).as_ptr_mut());
+            let addr = NonNull::new_unchecked(QEMU_ADDR as *mut u8);
             Uart16550::new(addr, 1).expect("16550 UART driver should be created")
         };
         uart.init();
