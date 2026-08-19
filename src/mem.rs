@@ -9,14 +9,14 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::{
     BSS_END, BSS_START, DATA_END, DATA_START, HEAP_SIZE, HEAP_START, KERNEL_STACK_END,
-    KERNEL_STACK_START, PAGE_SIZE, RODATA_END, RODATA_START, TEXT_END, TEXT_START,
+    KERNEL_STACK_START, PAGE_SIZE, RODATA_END, RODATA_START, TEXT_END, TEXT_START, UART_END,
+    UART_START,
     addr::{PhysAddr, VirtAddr, phys_to_virt},
     mem::{
         frame::BuddyAlloc,
         heap::LinkedHeap,
         page::{MappedPageTable, PteFlags},
     },
-    uart,
 };
 
 static FRAME_ALLOC: spin::Mutex<BuddyAlloc> = spin::Mutex::new(BuddyAlloc::empty());
@@ -130,8 +130,8 @@ pub fn init_page_table() {
 
     page_table
         .identity_map_range(
-            VirtAddr::new_trunc(uart::QEMU_ADDR),
-            VirtAddr::new_trunc(uart::QEMU_ADDR + 256),
+            VirtAddr::new_trunc(UART_START),
+            VirtAddr::new_trunc(UART_END),
             PteFlags::R | PteFlags::W,
             &mut allocator,
         )
@@ -145,6 +145,15 @@ pub fn init_page_table() {
             &mut allocator,
         )
         .expect("kernel's memory region should be mapped");
+
+    page_table
+        .identity_map_range(
+            VirtAddr::new_trunc(0x0200_0000),
+            VirtAddr::new_trunc(0x0200_FFFF),
+            PteFlags::R | PteFlags::W,
+            &mut allocator,
+        )
+        .expect("Core local interrupt controller memory region should be mapped");
 }
 
 #[global_allocator]

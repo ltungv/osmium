@@ -1,4 +1,4 @@
-//! A console for sending and receiving bytes to and from 16550 UART devices.
+//! Driver for 16550 UART devices.
 
 use core::{
     error::Error,
@@ -7,12 +7,12 @@ use core::{
     ptr::NonNull,
 };
 
-/// Address of the UART device on the `virt` machine in `QEMU`.
-pub const QEMU_ADDR: usize = 0x1000_0000;
+use crate::{UART_START, UART_STRIDE};
 
+/// Global 16550 UART device driver.
 static UART_16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
 
-/// Print a formatted string to the global console.
+/// Print a formatted string using the global 16550 UART driver.
 #[macro_export]
 macro_rules! print {
     ($($args:tt)*) => {{
@@ -20,14 +20,14 @@ macro_rules! print {
     }};
 }
 
-/// Print a formatted string to the global console, with a new line.
+/// Print a formatted string using the global 16550 UART driver, followed by a new line.
 #[macro_export]
 macro_rules! println {
     () => ($crate::print!("\r\n"));
     ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
 }
 
-/// Print to the global console.
+/// Print to the global 16550 UART driver.
 pub fn print(args: core::fmt::Arguments<'_>) {
     driver()
         .lock()
@@ -35,13 +35,12 @@ pub fn print(args: core::fmt::Arguments<'_>) {
         .expect("16550 UART driver should print");
 }
 
-/// Get a reference to the global console connected to the default address of the UART device on
-/// the `virt` machine in `QEMU`.
+/// Get a reference to the global 16550 UART device driver.
 pub fn driver() -> &'static spin::Mutex<Uart16550> {
     UART_16550.call_once(|| {
         let mut uart = unsafe {
-            let addr = NonNull::new_unchecked(QEMU_ADDR as *mut u8);
-            Uart16550::new(addr, 1).expect("16550 UART driver should be created")
+            let ptr = NonNull::new_unchecked(UART_START as *mut u8);
+            Uart16550::new(ptr, UART_STRIDE).expect("16550 UART driver should be created")
         };
         uart.init();
         spin::Mutex::new(uart)
@@ -50,7 +49,7 @@ pub fn driver() -> &'static spin::Mutex<Uart16550> {
 
 /// A driver for 16550 UART devices backed by memory-mapped I/O addresses.
 pub struct Uart16550 {
-    addr: NonNull<u8>,
+    ptr: NonNull<u8>,
     stride: NonZeroU8,
 }
 
@@ -63,11 +62,11 @@ unsafe impl Send for Uart16550 {}
 
 impl Write for Uart16550 {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        s.bytes().for_each(|b| {
+        for b in s.bytes() {
             while !self.try_put(b) {
                 core::hint::spin_loop();
             }
-        });
+        }
         Ok(())
     }
 }
@@ -116,56 +115,54 @@ impl Uart16550 {
     /// Number of registers of the device.
     const NUM_REGISTERS: usize = 8;
 
-    unsafe fn new(addr: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
+    unsafe fn new(ptr: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
         if !stride.is_power_of_two() {
             return Err(InvalidAddressError::InvalidStride(stride));
         }
         let Some(stride) = NonZeroU8::new(stride) else {
             return Err(InvalidAddressError::InvalidStride(stride));
         };
-        if (addr.as_ptr() as usize)
+        if (ptr.as_ptr() as usize)
             .checked_add((Self::NUM_REGISTERS - 1) * stride.get() as usize)
             .is_none()
         {
-            return Err(InvalidAddressError::InvalidAddr(addr));
+            return Err(InvalidAddressError::InvalidAddress(ptr));
         }
-        Ok(Self { addr, stride })
+        Ok(Self { ptr, stride })
     }
 
     /// Try to put a byte into the transmitter holding register, returning true if the byte has been
     /// successfully acknowledged.
     fn try_put(&mut self, byte: u8) -> bool {
         if self.read_from(Self::LSR) & (1 << 5) == 0 {
-            false
-        } else {
-            self.write_to(Self::THR, byte);
-            true
+            return false;
         }
+        self.write_to(Self::THR, byte);
+        true
     }
 
     /// Try to get a byte from the receiver holding register, returning `None` if no byte is ready
     /// to be read.
     fn try_get(&mut self) -> Option<u8> {
         if self.read_from(Self::LSR) & (1 << 0) == 0 {
-            None
-        } else {
-            Some(self.read_from(Self::RHR))
+            return None;
         }
+        Some(self.read_from(Self::RHR))
     }
 
-    /// Read a byte from a register offset
+    /// Read a byte from the register at the given offset.
     fn read_from(&mut self, offset: usize) -> u8 {
         unsafe {
-            self.addr
+            self.ptr
                 .add(offset * self.stride.get() as usize)
                 .read_volatile()
         }
     }
 
-    /// Write a byte to a register offset
+    /// Write a byte to the register at the given offset.
     fn write_to(&mut self, offset: usize, value: u8) {
         unsafe {
-            self.addr
+            self.ptr
                 .add(offset * self.stride.get() as usize)
                 .write_volatile(value);
         }
@@ -216,9 +213,9 @@ impl Uart16550 {
 
 #[derive(Debug)]
 enum InvalidAddressError {
-    /// The given address is invalid, e.g., it can't accomodate [`NUM_REGISTERS`]
-    /// consecutive addresses.
-    InvalidAddr(NonNull<u8>),
+    /// The given address is invalid, e.g., there can not be [`NUM_REGISTERS`]
+    /// consecutive addresses starting from the given address.
+    InvalidAddress(NonNull<u8>),
 
     /// The given stride is invalid. A stride must be non-zero and a power of two.
     InvalidStride(u8),
@@ -229,8 +226,8 @@ impl Error for InvalidAddressError {}
 impl fmt::Display for InvalidAddressError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::InvalidAddr(addr) => {
-                write!(f, "{addr:p} is not a valid 16550 UART device address")
+            Self::InvalidAddress(ptr) => {
+                write!(f, "{ptr:p} is not a valid 16550 UART device address")
             }
             Self::InvalidStride(stride) => write!(
                 f,
