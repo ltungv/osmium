@@ -41,8 +41,9 @@ _start:
   # Set the stack pointer.
   la sp, _stack_end
   # Set machine status register:
+  # 0b01 << 13: Floating-point unit state is 1 (FS=1 [Initial]).
   # 0b11 << 11: Machine previous privilege mode is 3 (MPP=3 [Machine]).
-  li t0, (0b11 << 11)
+  li t0, (0b01 << 13) | (0b11 << 11)
   csrw mstatus, t0
   # Set machine exception program counter to `kinit`.
   la t0, kinit
@@ -57,21 +58,13 @@ _start:
 2:
   # Set machine status register:
   # 0b01 << 11: Machine previous privilege mode is 1 (MPP=1 [Supervisor]).
-  li t0, (0b01 << 11)
+  # 1 << 7: Machine previous interrupt enable bit is 1.
+  # 1 << 5: Supervisor previous interrupt enable bit is 1.
+  li t0, (0b01 << 11) | (1 << 7) | (1 << 5)
   csrw mstatus, t0
   # Set machine exception program counter to `kmain`.
   la t0, kmain
   csrw mepc, t0
-  # Delegate exceptions to supervisor mode.
-  li t0, 0xffff
-  csrw medeleg, t0
-  # Delegate interrupts to supervisor mode.
-  li t0, 0xffff
-  csrw mideleg, t0
-  # Explicitly disable machine interrupts.
-  csrw mie, zero
-  # Explicitly disable supervisor interrupts.
-  csrw sie, zero
   # Set machine trap vector base address to `_mtrap`.
   la t0, _mtrap
   csrw mtvec, t0
@@ -84,9 +77,6 @@ _start:
   # A (bits 3:4) = 3 (NAPOT - Naturally Aligned Power-Of-Two)
   li t0, 0x1f
   csrw pmpcfg0, t0
-  # Set the supervisor address translation and protection register to the value
-  # returned by `kinit`.
-  csrw satp, a0
   # Clear the translation lookaside buffer (TLB).
   sfence.vma
   # Drop to supervisor mode
