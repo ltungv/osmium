@@ -21,7 +21,7 @@ mod addr;
 mod mem;
 mod uart;
 
-use core::{arch::asm, ptr::NonNull};
+use core::{arch::asm, hint::spin_loop};
 
 use alloc::vec::Vec;
 use mem::frame_allocator;
@@ -31,51 +31,56 @@ use crate::{
     mem::{kheap, page_table},
 };
 
+static DUMMY_TRAP_FRAME: TrapFrame = TrapFrame::new();
+
 /// The size of a page in bytes.
-pub const PAGE_SIZE: usize = 4096;
+const PAGE_SIZE: usize = 4096;
+
+/// Distance between consecutive registers of the 16550 UART device.
+const UART_STRIDE: u8 = 1;
+
+/// First memory address of the 16550 UART device on the `virt` machine in `QEMU`
+const UART_START: usize = 0x1000_0000;
+
+/// Last memory address of the 16550 UART device on the `virt` machine in `QEMU`
+const UART_END: usize = UART_START + 8 * UART_STRIDE as usize;
 
 unsafe extern "C" {
     /// First memory address in the `.text` section.
-    pub static TEXT_START: usize;
+    static TEXT_START: usize;
 
     /// Last memory address in the `.text` section.
-    pub static TEXT_END: usize;
+    static TEXT_END: usize;
 
     /// First memory address in the `.rodata` section.
-    pub static RODATA_START: usize;
+    static RODATA_START: usize;
 
     /// Last memory address in the `.rodata` section.
-    pub static RODATA_END: usize;
+    static RODATA_END: usize;
 
     /// First memory address in the `.data` section.
-    pub static DATA_START: usize;
+    static DATA_START: usize;
 
     /// Last memory address in the `.data` section.
-    pub static DATA_END: usize;
+    static DATA_END: usize;
 
     /// First memory address in the `.bss` section.
-    pub static BSS_START: usize;
+    static BSS_START: usize;
 
     /// Last memory address in the `.bss` section.
-    pub static BSS_END: usize;
+    static BSS_END: usize;
 
     /// First memory address of the kernel's stack.
-    pub static KERNEL_STACK_START: usize;
+    static KERNEL_STACK_START: usize;
 
     /// Last memory address of the kernel's stack.
-    pub static KERNEL_STACK_END: usize;
+    static KERNEL_STACK_END: usize;
 
     /// First memory address of the heap.
-    pub static HEAP_START: usize;
+    static HEAP_START: usize;
 
     /// Size of the heap in bytes.
-    pub static HEAP_SIZE: usize;
-
-    /// First memory address.
-    pub static MEMORY_START: usize;
-
-    /// Last memory address.
-    pub static MEMORY_END: usize;
+    static HEAP_SIZE: usize;
 }
 
 /// Kernel initialization routine. The bootloader (`boot.S`) jumps to this function after setting up
@@ -86,17 +91,21 @@ unsafe extern "C" {
 /// The initialization process will panic if any error occurs. Most issues come from the MMU not
 /// being initialized properly, which can be a result of bugs or insufficient memory.
 #[unsafe(no_mangle)]
-pub extern "C" fn kinit() -> usize {
+extern "C" fn kinit() {
     mem::init_frame_allocator();
     mem::init_kheap();
     mem::init_page_table();
     frame_allocator().lock().debug_print();
-    page_table().lock().satp()
+    let satp = page_table().lock().satp();
+    unsafe {
+        asm!("csrw mscratch, {}", in(reg) (&raw const DUMMY_TRAP_FRAME as usize));
+        asm!("csrw satp, {}", in(reg) satp);
+    }
 }
 
 /// Kernel main runtime.
 #[unsafe(no_mangle)]
-pub extern "C" fn kmain() {
+extern "C" fn kmain() {
     println!("hello, world!");
     {
         let vaddr = VirtAddr::new_trunc(unsafe { HEAP_START });
@@ -149,20 +158,26 @@ pub extern "C" fn kmain() {
         // Set the next machine timer to fire.
         let mtimecmp = phys_to_virt(PhysAddr::new_trunc(0x0200_4000)).as_ptr_mut::<u64>();
         let mtime = phys_to_virt(PhysAddr::new_trunc(0x0200_bff8)).as_ptr::<u64>();
+        println!("mtimecmp={mtimecmp:p} mtime={mtime:p}");
         // The frequency given by QEMU is 10_000_000 Hz, so this sets
         // the next interrupt to fire one second from now.
         mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
+        println!("mtimecmp={mtimecmp:p} mtime={mtime:p}");
         // Let's cause a page fault and see what happens. This should trap
         // to m_trap under trap.rs
-        let v = NonNull::dangling();
-        v.write_volatile(0);
+        // let v = NonNull::dangling();
+        // v.write_volatile(0);
+    }
+
+    loop {
+        spin_loop();
     }
 }
 
 /// Context of the frame causing the trap.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct TrapFrame {
+struct TrapFrame {
     gp_regs: [usize; 32],
     fp_regs: [usize; 32],
     satp: usize,
@@ -173,11 +188,26 @@ pub struct TrapFrame {
     mode: usize,
 }
 
+impl TrapFrame {
+    const fn new() -> Self {
+        Self {
+            gp_regs: [0; 32],
+            fp_regs: [0; 32],
+            satp: 0,
+            pc: 0,
+            hartid: 0,
+            qm: 0,
+            pid: 0,
+            mode: 0,
+        }
+    }
+}
+
 /// # Panics
 ///
 /// This will panic when most traps occur because we haven't implemented a handler for them.
 #[unsafe(no_mangle)]
-pub extern "C" fn mtrap(
+extern "C" fn mtrap(
     epc: usize,
     tval: usize,
     cause: usize,
@@ -278,7 +308,7 @@ pub extern "C" fn mtrap(
 /// never called. Additionally, a `eh_catch_typeinfo` static is needed for certain targets which
 /// implement Rust panics on top of C++ exceptions.
 #[unsafe(no_mangle)]
-pub const extern "C" fn eh_personality() {}
+const extern "C" fn eh_personality() {}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
@@ -301,7 +331,7 @@ fn abort() -> ! {
 
 /// Errors that occur when working with the page table.
 #[derive(Debug)]
-pub enum Error {
+enum Error {
     /// The kernel and/or its subsystems are in an invalid state.
     InvalidState,
 
