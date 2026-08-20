@@ -1,11 +1,10 @@
-/* Linker script for risc-v qemu "virt" machine. */
+/* Linker script for risc-v QEMU "virt" machine. */
 
 /* Set risc-v as the architecture. */
 OUTPUT_ARCH(riscv)
 
-/* Set _start as the entry point. */
-ENTRY(_start)
-
+/* Set _entry as the entry point. */
+ENTRY(_entry)
 
 /* A single 128M "ram" section that is:
  * - 'w': writeable
@@ -29,7 +28,7 @@ PHDRS {
 	bss PT_LOAD;
 }
 
-/* The memory is organized based on which section it is in. in rust, we have:
+/* The memory is organized based on which section it is in. In Rust, we have:
  * - CPU instructions stored in `text`.
  * - global constants stored in `rodata`.
  * - global initialized variables stored in `data`.
@@ -45,19 +44,21 @@ SECTIONS {
 	PROVIDE(_global_pointer = .);
 
 	.rodata : {
+    . = ALIGN(16);
 		PROVIDE(_rodata_start = .);
-		*(.rodata .rodata.*)
+		*(.srodata .srodata.*) *(.rodata .rodata.*)
 		PROVIDE(_rodata_end = .);
 	} >ram AT>ram :text
 
 	.data : {
-		. = ALIGN(4096);
+		. = ALIGN(16);
 		PROVIDE(_data_start = .);
 		*(.sdata .sdata.*) *(.data .data.*)
 		PROVIDE(_data_end = .);
 	} >ram AT>ram :data
 
 	.bss : {
+		. = ALIGN(16);
 		PROVIDE(_bss_start = .);
 		*(.sbss .sbss.*) *(.bss .bss.*)
 		PROVIDE(_bss_end = .);
@@ -66,7 +67,7 @@ SECTIONS {
 	PROVIDE(_memory_start = ORIGIN(ram));
 	PROVIDE(_memory_end = _memory_start + LENGTH(ram));
 
-	PROVIDE(_stack_start = _bss_end + 0x80000);
+	PROVIDE(_stack_start = _bss_end);
 	PROVIDE(_stack_end = _stack_start + 0x80000);
 
 	PROVIDE(_heap_start = _stack_end);

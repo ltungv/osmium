@@ -1,4 +1,4 @@
-//! A RISC-V kernel.
+//! A risc-v kernel.
 
 #![feature(alloc_error_handler)]
 #![no_std]
@@ -19,16 +19,23 @@ extern crate alloc;
 
 mod addr;
 mod mem;
+mod proc;
+mod riscv;
 mod uart;
 
-use core::{arch::asm, hint::spin_loop};
+use core::arch::asm;
 
-use alloc::vec::Vec;
+use alloc::slice;
 use mem::frame_allocator;
 
 use crate::{
-    addr::{PhysAddr, VirtAddr, phys_to_virt},
-    mem::{kheap, page_table},
+    addr::{PhysAddr, phys_to_virt},
+    mem::page_table,
+    proc::cpuid,
+    riscv::{
+        r_menvcfg, r_mhartid, r_mstatus, r_sie, w_medeleg, w_menvcfg, w_mepc, w_mideleg, w_mstatus,
+        w_pmpaddr0, w_pmpcfg0, w_satp, w_sie, w_tp,
+    },
 };
 
 static DUMMY_TRAP_FRAME: TrapFrame = TrapFrame::new();
@@ -83,96 +90,146 @@ unsafe extern "C" {
     static HEAP_SIZE: usize;
 }
 
-/// Kernel initialization routine. The bootloader (`boot.S`) jumps to this function after setting up
-/// the device in machine mode in `_start`.
-///
-/// # Panics
-///
-/// The initialization process will panic if any error occurs. Most issues come from the MMU not
-/// being initialized properly, which can be a result of bugs or insufficient memory.
+// TODO: Initialize the timer.
 #[unsafe(no_mangle)]
-extern "C" fn kinit() {
-    mem::init_frame_allocator();
-    mem::init_kheap();
-    mem::init_page_table();
-    frame_allocator().lock().debug_print();
-    let satp = page_table().lock().satp();
+extern "C" fn boot() {
     unsafe {
-        asm!("csrw mscratch, {}", in(reg) (&raw const DUMMY_TRAP_FRAME as usize));
-        asm!("csrw satp, {}", in(reg) satp);
+        // Set `mstatus.MPP` to 1, so the CPU switch into supervisor mode after `mret` is called.
+        w_mstatus({
+            let mut mstatus = r_mstatus();
+            mstatus &= !(0b11 << 11);
+            mstatus |= 0b01 << 11;
+            mstatus
+        });
+
+        // Set `mepc` to the address of `main`, so the CPU jumps to `main` after `mret` is called.
+        w_mepc(main as *const () as usize);
+
+        // Set `satp` to 0 to disable paging.
+        w_satp(0);
+
+        // Delegate all exceptions and interrupts to supervisor mode.
+        w_medeleg(0xffff);
+        w_mideleg(0xffff);
+
+        // Set `sie` to enable specific interrupts:
+        // 1 << 9: Supervisor external interrupt enable bit
+        // 1 << 5: Supervisor timer interrupt enable bit
+        w_sie(r_sie() | (1 << 9) | (1 << 5));
+
+        // Give supervisor mode access to all physical memory.
+        w_pmpaddr0(0x3f_ffff_ffff_ffff);
+        w_pmpcfg0(0xf);
+
+        // Enable hardware updates of page table entries' A and D bits.
+        w_menvcfg(r_menvcfg() | (1 << 61));
+
+        let hartid = r_mhartid();
+        if hartid == 0 {
+            // Initialize the bss memory section to 0. Only one CPU is responsible for writing, and
+            // there always exists a CPU with the identifier 0.
+            let bss = slice::from_raw_parts_mut(BSS_START as *mut u8, BSS_END - BSS_START);
+            bss.fill(0);
+        }
+
+        // Set the thread pointer to the identifier of the current CPU.
+        w_tp(hartid);
+
+        // Switch to supervisor mode and jump to `main`.
+        asm!("mret");
     }
 }
 
-/// Kernel main runtime.
-#[unsafe(no_mangle)]
-extern "C" fn kmain() {
-    println!("hello, world!");
-    {
-        let vaddr = VirtAddr::new_trunc(unsafe { HEAP_START });
-        let paddr = page_table()
-            .lock()
-            .translate(vaddr)
-            .unwrap_or(PhysAddr::new_trunc(0));
+extern "C" fn main() {
+    if cpuid() == 0 {
+        println!();
+        println!("osmium kernel is booting");
+        println!();
 
-        println!("{vaddr:p} --> {paddr:p}");
-        kheap().lock().debug_print();
-        println!("-------------------------------");
+        mem::init_frame_allocator();
+        mem::init_kheap();
+        mem::init_page_table();
+        frame_allocator().lock().debug_print();
+        let satp = page_table().lock().satp();
+        unsafe {
+            asm!("csrw mscratch, {}", in(reg) (&raw const DUMMY_TRAP_FRAME as usize));
+            asm!("csrw satp, {}", in(reg) satp);
+        }
     }
-    {
-        let v1: Vec<u8> = Vec::with_capacity(8);
-        let v2: Vec<u8> = Vec::with_capacity(8);
-        let v3: Vec<u8> = Vec::with_capacity(8);
-        println!("allocated v1 v2 v3");
-        kheap().lock().debug_print();
-        println!("-------------------------------");
-
-        drop(v2);
-        println!("dropped v2");
-        kheap().lock().debug_print();
-        println!("-------------------------------");
-
-        let v4: Vec<u8> = Vec::with_capacity(64);
-        println!("allocated v4");
-        kheap().lock().debug_print();
-        println!("-------------------------------");
-
-        drop(v1);
-        drop(v3);
-        drop(v4);
-        println!("dropped v1 v3 v4");
-        kheap().lock().debug_print();
-        println!("-------------------------------");
-
-        let v5: Vec<u8> = Vec::with_capacity(1);
-        println!("allocated v5");
-        kheap().lock().debug_print();
-        println!("-------------------------------");
-
-        drop(v5);
-        println!("dropped v5");
-        kheap().lock().debug_print();
-        println!("-------------------------------");
-    }
-    println!("triggering faults...");
-    unsafe {
-        // Set the next machine timer to fire.
-        let mtimecmp = phys_to_virt(PhysAddr::new_trunc(0x0200_4000)).as_ptr_mut::<u64>();
-        let mtime = phys_to_virt(PhysAddr::new_trunc(0x0200_bff8)).as_ptr::<u64>();
-        println!("mtimecmp={mtimecmp:p} mtime={mtime:p}");
-        // The frequency given by QEMU is 10_000_000 Hz, so this sets
-        // the next interrupt to fire one second from now.
-        mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
-        println!("mtimecmp={mtimecmp:p} mtime={mtime:p}");
-        // Let's cause a page fault and see what happens. This should trap
-        // to m_trap under trap.rs
-        // let v = NonNull::dangling();
-        // v.write_volatile(0);
-    }
-
     loop {
-        spin_loop();
+        core::hint::spin_loop();
     }
 }
+
+// /// Kernel main runtime.
+// extern "C" fn kmain() {
+//     println!("hello, world!");
+//     {
+//         let vaddr = VirtAddr::new_trunc(unsafe { HEAP_START });
+//         let paddr = page_table()
+//             .lock()
+//             .translate(vaddr)
+//             .unwrap_or(PhysAddr::new_trunc(0));
+//
+//         println!("{vaddr:p} --> {paddr:p}");
+//         kheap().lock().debug_print();
+//         println!("-------------------------------");
+//     }
+//     {
+//         let v1: Vec<u8> = Vec::with_capacity(8);
+//         let v2: Vec<u8> = Vec::with_capacity(8);
+//         let v3: Vec<u8> = Vec::with_capacity(8);
+//         println!("allocated v1 v2 v3");
+//         kheap().lock().debug_print();
+//         println!("-------------------------------");
+//
+//         drop(v2);
+//         println!("dropped v2");
+//         kheap().lock().debug_print();
+//         println!("-------------------------------");
+//
+//         let v4: Vec<u8> = Vec::with_capacity(64);
+//         println!("allocated v4");
+//         kheap().lock().debug_print();
+//         println!("-------------------------------");
+//
+//         drop(v1);
+//         drop(v3);
+//         drop(v4);
+//         println!("dropped v1 v3 v4");
+//         kheap().lock().debug_print();
+//         println!("-------------------------------");
+//
+//         let v5: Vec<u8> = Vec::with_capacity(1);
+//         println!("allocated v5");
+//         kheap().lock().debug_print();
+//         println!("-------------------------------");
+//
+//         drop(v5);
+//         println!("dropped v5");
+//         kheap().lock().debug_print();
+//         println!("-------------------------------");
+//     }
+//     println!("triggering faults...");
+//     unsafe {
+//         // Set the next machine timer to fire.
+//         let mtimecmp = phys_to_virt(PhysAddr::new_trunc(0x0200_4000)).as_ptr_mut::<u64>();
+//         let mtime = phys_to_virt(PhysAddr::new_trunc(0x0200_bff8)).as_ptr::<u64>();
+//         println!("mtimecmp={mtimecmp:p} mtime={mtime:p}");
+//         // The frequency given by QEMU is 10_000_000 Hz, so this sets
+//         // the next interrupt to fire one second from now.
+//         mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
+//         println!("mtimecmp={mtimecmp:p} mtime={mtime:p}");
+//         // Let's cause a page fault and see what happens. This should trap
+//         // to m_trap under trap.rs
+//         // let v = NonNull::dangling();
+//         // v.write_volatile(0);
+//     }
+//
+//     loop {
+//         spin_loop();
+//     }
+// }
 
 /// Context of the frame causing the trap.
 #[repr(C)]
