@@ -151,7 +151,7 @@ impl BuddyAlloc {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Header {
     next: Option<usize>,
     order: u8,

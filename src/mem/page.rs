@@ -130,7 +130,7 @@ impl PageTable {
             if !flags.contains(PteFlags::V) {
                 break;
             }
-            // According to RISC-V, a leaf can be at any level.
+            // According to risc-v, a leaf can be at any level.
             if flags.is_rwx() {
                 // One thing to note is that only PPN[2:leaf-level] will be used to develop the
                 // physical physical addres. For example, if level 2's (the top level) page table
