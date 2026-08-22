@@ -1,48 +1,80 @@
 use core::{
-    alloc::{Layout, LayoutError},
-    ptr::NonNull,
+    alloc::{GlobalAlloc, Layout, LayoutError},
+    ptr::{self, NonNull},
 };
 
-use crate::{addr, println};
+use crate::{
+    PAGE_SIZE,
+    addr::{self, VirtAddr},
+    kalloc,
+};
 
 fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
     let addr = addr::align_up(ptr as usize, align);
     addr as *mut u8
 }
 
-// A simple byte-level allocator. Free memory blocks are kept track using a linked list whose nodes
-// are backed by the same memory blocks that are being given out.
-pub struct LinkedHeap {
+struct KernelHeap(spin::Mutex<LinkedHeap>);
+
+unsafe impl GlobalAlloc for KernelHeap {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe { self.0.lock().alloc(layout).unwrap_or_else(ptr::null_mut) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            self.0.lock().dealloc(ptr, layout);
+        }
+    }
+}
+
+static KHEAP: KernelHeap = KernelHeap(spin::Mutex::new(LinkedHeap::empty()));
+
+pub fn init() {
+    let mut kheap = KHEAP.0.lock();
+    let ppn = kalloc::get()
+        .lock()
+        .alloc(64)
+        .expect("physical memory should be available");
+
+    unsafe {
+        kheap.init(
+            VirtAddr::direct(ppn.addr()).as_ptr_mut::<u8>(),
+            PAGE_SIZE * 64,
+        );
+    }
+}
+
+/// A simple byte-level allocator.
+///
+/// Free memory blocks are kept track using a linked list backed by the same memory blocks that are
+/// being given out.
+struct LinkedHeap {
     head: Node,
     info: Info,
 }
 
 impl LinkedHeap {
     /// Create an empty heap with no valid memory block.
-    pub const fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             head: Node::dummy(),
             info: Info::new(core::ptr::null_mut(), 0),
         }
     }
 
-    /// Return the address and size of the heap.
-    pub const fn info(&self) -> Info {
-        self.info
-    }
-
     /// Initialize the heap given the address and size of a free memory block.
-    pub unsafe fn init(&mut self, ptr: *mut u8, size: usize) {
+    unsafe fn init(&mut self, ptr: *mut u8, size: usize) {
         assert!(
             size >= size_of::<Node>(),
             "heap should have at least {} bytes",
             size_of::<Node>()
         );
-        // Align the start of the heap to the alignment of a `Node`.
+        // align the start of the heap to the alignment of a node
         let aligned_node_ptr = align_up(ptr, align_of::<Node>());
-        // The heap start address is shifted up a few bytes after alignment.
+        // the heap start address is shifted up a few bytes after alignment
         let aligned_offset = unsafe { aligned_node_ptr.offset_from_unsigned(ptr) };
-        // Calculate the number of usable bytes after aligning the start address and size.
+        // calculate the number of usable bytes after aligning the start address and size
         let heap_len = addr::align_down(size - aligned_offset, align_of::<Node>());
         assert!(
             heap_len >= size_of::<Node>(),
@@ -53,16 +85,7 @@ impl LinkedHeap {
         self.head.next = Some(unsafe { Node::make(self.info, self.head.next.take()) });
     }
 
-    pub fn debug_print(&self) {
-        let mut next = self.head.next;
-        while let Some(curr) = next {
-            let curr = unsafe { curr.as_ref() };
-            println!("{:p} - {} bytes", curr, curr.size);
-            next = curr.next;
-        }
-    }
-
-    pub unsafe fn alloc(&mut self, layout: Layout) -> Option<*mut u8> {
+    unsafe fn alloc(&mut self, layout: Layout) -> Option<*mut u8> {
         let layout = Node::align_layout(layout).expect("layout should be aligned");
         let mut cursor = self.cursor()?;
         loop {
@@ -75,7 +98,7 @@ impl LinkedHeap {
         }
     }
 
-    pub unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+    unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
         let layout = Node::align_layout(layout).expect("layout should be aligned");
         let mut node = unsafe { Node::make(Info::new(ptr, layout.size()), None) };
         if let Some(cursor) = self.cursor() {
@@ -83,9 +106,7 @@ impl LinkedHeap {
                 Ok(cursor) => (cursor, 1),
                 Err(mut cursor) => {
                     while !cursor.try_insert_succeed(node) {
-                        cursor = cursor
-                            .next()
-                            .expect("cursor should not end before a slot can be found");
+                        cursor = cursor.next().expect("cursor should not end");
                     }
                     (cursor, 2)
                 }
@@ -136,7 +157,7 @@ impl Node {
             size_of::<Self>()
         );
         unsafe {
-            #[allow(clippy::cast_ptr_alignment)]
+            #[expect(clippy::cast_ptr_alignment)]
             let ptr = info.ptr.cast::<Self>();
             ptr.write(Self {
                 size: info.len,
@@ -152,9 +173,9 @@ impl Node {
 
     /// Adjust the layout such that the resulting memory block can also be used to store a `Node`.
     fn align_layout(layout: Layout) -> Result<Layout, LayoutError> {
-        // When a memory block is free, a `Node` is stored at the beginning of the block to hold
-        // the block's size and an optional pointer to the next free block. Once occupied, the
-        // block is overwriten with the object described by the original layout.
+        // when a memory block is free, a `node` is stored at the beginning of the block to hold
+        // the block's size and an optional pointer to the next free block
+        // once occupied, the block is overwriten with the object described by the original layout
         let size = layout.size().max(size_of::<Self>());
         let size = addr::align_up(size, align_of::<Self>());
         Layout::from_size_align(size, layout.align())
@@ -174,9 +195,9 @@ impl Node {
 }
 
 #[derive(Clone, Copy)]
-pub struct Info {
-    pub ptr: *mut u8,
-    pub len: usize,
+struct Info {
+    ptr: *mut u8,
+    len: usize,
 }
 
 unsafe impl Send for Info {}

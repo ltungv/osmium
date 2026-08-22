@@ -1,4 +1,4 @@
-//! Driver for 16550 UART devices.
+//! Driver for uart devices.
 
 use core::{
     error::Error,
@@ -7,12 +7,12 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::{UART_START, UART_STRIDE};
+use crate::UART_ADDR;
 
-/// Global 16550 UART device driver.
+/// Global uart device driver.
 static UART_16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
 
-/// Print a formatted string using the global 16550 UART driver.
+/// Print a formatted string using the global uart driver.
 #[macro_export]
 macro_rules! print {
     ($($args:tt)*) => {{
@@ -20,27 +20,27 @@ macro_rules! print {
     }};
 }
 
-/// Print a formatted string using the global 16550 UART driver, followed by a new line.
+/// Print a formatted string using the global uart driver, followed by a new line.
 #[macro_export]
 macro_rules! println {
     () => ($crate::print!("\r\n"));
     ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
 }
 
-/// Print to the global 16550 UART driver.
+/// Print using the global uart driver.
 pub fn print(args: core::fmt::Arguments<'_>) {
     driver()
         .lock()
         .write_fmt(args)
-        .expect("16550 UART driver should print");
+        .expect("uart driver should print");
 }
 
-/// Get a reference to the global 16550 UART device driver.
+/// Get a reference to the global uart driver.
 pub fn driver() -> &'static spin::Mutex<Uart16550> {
     UART_16550.call_once(|| {
         let mut uart = unsafe {
-            let ptr = NonNull::new_unchecked(UART_START as *mut u8);
-            Uart16550::new(ptr, UART_STRIDE).expect("16550 UART driver should be created")
+            let ptr = NonNull::new_unchecked(UART_ADDR as *mut u8);
+            Uart16550::new(ptr, 1).expect("uart driver should be created")
         };
         uart.init();
         spin::Mutex::new(uart)
@@ -53,11 +53,13 @@ pub struct Uart16550 {
     stride: NonZeroU8,
 }
 
-// SAFETY: `Uart16550` is not `Sync`, so concurrent access from multiple thread is not possible
-// without additional synchronizations. The device address is ensured to points to a physical memory
-// region large enough to accomodate `NUM_REGISTERS` addresses, and access to the region is given
-// exclusively to the driver instance. All operations take a `&mut self` which ensures the driver is
-// only accessed by at most one thread at a time.
+// SAFETY:
+// * `Uart16550` is not `Sync`, so concurrent access from multiple thread is not possible without
+//   additional synchronizations
+// * the device address is ensured to points to a physical memory region large enough to accomodate
+//   `num_registers` addresses, and access to the region is given exclusively to the driver instance
+// * all operations take a `&mut self` which ensures the driver is only accessed by at most one
+//   thread at a time
 unsafe impl Send for Uart16550 {}
 
 impl Write for Uart16550 {
@@ -71,7 +73,6 @@ impl Write for Uart16550 {
     }
 }
 
-#[allow(dead_code)]
 impl Uart16550 {
     /// Receiver holding register.
     const RHR: usize = 0;
@@ -170,15 +171,14 @@ impl Uart16550 {
 
     /// Initialize the UART device.
     fn init(&mut self) {
-        // Disable all interrupts during initialization.
+        // disable all interrupts during initialization
         self.write_to(Self::IER, 0);
-
-        // Data word length: 8 bits.
+        // data word length: 8 bits
         let lcr_value = 1 << 1 | 1 << 0;
-
-        // Set the divisor from a global clock rate of 22.729 mhz (22,729,000 cycles per second)
-        // to a signaling rate of 2400 (baud). The formula given in the ns16500a specification
-        // for calculating the divisor is:
+        // set the divisor from a global clock rate of 22.729 mhz (22,729,000 cycles per second)
+        // to a signaling rate of 2400 (baud).
+        //
+        // the formula given in the ns16500a specification for calculating the divisor is:
         // divisor = ceil((clock_hz) / (baud_sps x 16))
         // divisor = ceil(22_729_000 / (2400 x 16))
         // divisor = ceil(22_729_000 / 38_400)
@@ -186,38 +186,31 @@ impl Uart16550 {
         // divisor = 592
         let divisor = 592u16;
         {
-            // Enable DLAB to access the divisor latches (offsets 0 and 1 become DLL/DLM).
+            // enable dlab to access the divisor latches (offsets 0 and 1 become dll/dlm)
             self.write_to(Self::LCR, lcr_value | 1 << 7);
-
-            // Set divisor least significant byte.
+            // set divisor least significant byte
             self.write_to(Self::DLL, (divisor & 0xff) as u8);
-
-            // Set divisor most significant byte.
+            // set divisor most significant byte
             self.write_to(Self::DLM, (divisor >> 8) as u8);
-
-            // Disable DLAB and set data word length to 8 bits.
+            // disable dlab and set data word length to 8 bits
             self.write_to(Self::LCR, lcr_value);
         }
-
-        // Enable FIFO, clear TX/RX queues, and set interrupt watermark at 14 bytes.
+        // enable fifo, clear tx/rx queues, and set interrupt watermark at 14 bytes
         self.write_to(Self::FCR, 1 << 7 | 1 << 6 | 1 << 2 | 1 << 1 | 1 << 0);
-
-        // Mark data terminal ready, and signal request to send.
+        // mark data terminal ready, and signal request to send
         self.write_to(Self::MCR, 1 << 1 | 1 << 0);
-
-        // Enable receiver buffer interrupts (must be after DLAB is disabled,
-        // since offset 1 is shared between IER and DLM).
+        // enable receiver buffer interrupts (must be after dlab is disabled, since offset 1 is
+        // shared between ier and dlm)
         self.write_to(Self::IER, 1 << 0);
     }
 }
 
 #[derive(Debug)]
 enum InvalidAddressError {
-    /// The given address is invalid, e.g., there can not be [`NUM_REGISTERS`]
-    /// consecutive addresses starting from the given address.
+    /// The given address is invalid.
     InvalidAddress(NonNull<u8>),
 
-    /// The given stride is invalid. A stride must be non-zero and a power of two.
+    /// The given stride is invalid.
     InvalidStride(u8),
 }
 
@@ -227,7 +220,7 @@ impl fmt::Display for InvalidAddressError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InvalidAddress(ptr) => {
-                write!(f, "{ptr:p} is not a valid 16550 UART device address")
+                write!(f, "{ptr:p} is not a valid UART device address")
             }
             Self::InvalidStride(stride) => write!(
                 f,

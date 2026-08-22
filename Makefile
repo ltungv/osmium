@@ -5,7 +5,7 @@ CC=riscv64-linux-gnu-gcc
 CFLAGS=-std=c++17 -Wall -Wextra -pedantic -O0 -g
 CFLAGS+=-static -nostdlib -ffreestanding -fno-rtti -fno-exceptions
 CFLAGS+=-march=rv64gc -mabi=lp64d
-LINKER_SCRIPT=-Tsrc/lds/virt.ld
+LINKER_SCRIPT=-Tvirt.ld
 RUST_PROFILE=dev
 ifeq ($(RUST_PROFILE),dev)
 	BUILD_CMD=cargo build

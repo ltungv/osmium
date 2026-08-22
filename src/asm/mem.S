@@ -1,48 +1,33 @@
 ########################
-# READ-ONLY DATA
+# read-only data
 ########################
 .section .rodata
 
-.global TEXT_START
-TEXT_START: .dword _text_start
+.global MEM_ADDR
+MEM_ADDR: .dword _mem_addr
 
-.global TEXT_END
-TEXT_END: .dword _text_end
+.global MEM_SIZE
+MEM_SIZE: .dword _mem_size
 
-.global RODATA_START
-RODATA_START: .dword _rodata_start
+.global TRAMP_ADDR
+TRAMP_ADDR: .dword _tramp_addr
 
-.global RODATA_END
-RODATA_END: .dword _rodata_end
+.global RODATA_ADDR
+RODATA_ADDR: .dword _rodata_addr
 
-.global DATA_START
-DATA_START: .dword _data_start
+.global DATA_ADDR
+DATA_ADDR: .dword _data_addr
 
-.global DATA_END
-DATA_END: .dword _data_end
+.global BSS_ADDR
+BSS_ADDR: .dword _bss_addr
 
-.global BSS_START
-BSS_START: .dword _bss_start
+.global STACK_ADDR
+STACK_ADDR: .dword _stack_addr
 
-.global BSS_END
-BSS_END: .dword _bss_end
-
-.global KERNEL_STACK_START
-KERNEL_STACK_START: .dword _stack_start
-
-.global KERNEL_STACK_END
-KERNEL_STACK_END: .dword _stack_end
-
-.global HEAP_START
-HEAP_START: .dword _heap_start
-
-.global HEAP_SIZE
-HEAP_SIZE: .dword _heap_size
+.global HEAP_ADDR
+HEAP_ADDR: .dword _heap_addr
 
 ########################
-# DATA
+# data
 ########################
 .section .data
-
-.global KERNEL_TABLE
-KERNEL_TABLE: .dword 0
