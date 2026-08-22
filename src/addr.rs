@@ -1,18 +1,93 @@
-use core::fmt;
+use core::{fmt, ops};
 
-use crate::{
-    PAGE_SIZE,
-    mem::{ppn::PhysPageNumber, vpn::VirtPageNumber},
-};
+use crate::PAGE_SIZE;
 
-pub const fn align_down(x: usize, align: usize) -> usize {
-    assert!(align.is_power_of_two(), "align must be a power of two");
-    x & !(align - 1)
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PhysPageNumber(usize);
+
+impl PhysPageNumber {
+    pub const BITS: usize = 44;
+
+    pub const fn new_trunc(ppn: usize) -> Self {
+        let mask = (1 << Self::BITS) - 1;
+        Self(ppn & mask)
+    }
+
+    pub const fn get(self) -> usize {
+        self.0
+    }
+
+    pub const fn addr(self) -> PhysAddr {
+        PhysAddr::new_trunc(self.0 << 12)
+    }
 }
 
-pub const fn align_up(x: usize, align: usize) -> usize {
-    assert!(align.is_power_of_two(), "align must be a power of two");
-    (x + align - 1) & !(align - 1)
+impl ops::Add<usize> for PhysPageNumber {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl ops::Sub<Self> for PhysPageNumber {
+    type Output = usize;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.0 - rhs.0
+    }
+}
+
+impl fmt::Pointer for PhysPageNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ppn@{:x}", self.0)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VirtPageNumber(usize);
+
+impl VirtPageNumber {
+    pub const BITS: usize = 27;
+
+    pub const fn new_trunc(vpn: usize) -> Self {
+        let mask = (1 << Self::BITS) - 1;
+        Self(vpn & mask)
+    }
+
+    pub const fn get(self) -> usize {
+        self.0
+    }
+
+    pub const fn addr(self) -> VirtAddr {
+        VirtAddr::new_trunc(self.0 << 12)
+    }
+
+    pub const fn indices(self) -> [usize; 3] {
+        [self.0 & 0x1ff, self.0 >> 9 & 0x1ff, self.0 >> 18 & 0x1ff]
+    }
+}
+
+impl ops::Add<usize> for VirtPageNumber {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl ops::Sub<Self> for VirtPageNumber {
+    type Output = usize;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.0 - rhs.0
+    }
+}
+
+impl fmt::Pointer for VirtPageNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "vpn@{:x}", self.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,9 +130,13 @@ pub struct VirtAddr(usize);
 impl VirtAddr {
     const BITS: usize = 39;
 
+    pub const unsafe fn direct(addr: PhysAddr) -> Self {
+        Self::new_trunc(addr.0)
+    }
+
     pub const fn new_trunc(addr: usize) -> Self {
-        let mask = (1 << Self::BITS) - 1;
-        Self(addr & mask)
+        let shift = usize::BITS as usize - Self::BITS;
+        Self(((addr << shift).cast_signed() >> shift).cast_unsigned())
     }
 
     pub const fn page_number(self) -> VirtPageNumber {
@@ -91,7 +170,12 @@ impl fmt::Pointer for VirtAddr {
     }
 }
 
-#[inline]
-pub const unsafe fn phys_to_virt(paddr: PhysAddr) -> VirtAddr {
-    VirtAddr::new_trunc(paddr.0)
+pub const fn align_down(x: usize, align: usize) -> usize {
+    assert!(align.is_power_of_two(), "align must be a power of two");
+    x & !(align - 1)
+}
+
+pub const fn align_up(x: usize, align: usize) -> usize {
+    assert!(align.is_power_of_two(), "align must be a power of two");
+    (x + align - 1) & !(align - 1)
 }
