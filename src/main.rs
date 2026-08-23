@@ -1,5 +1,6 @@
 //! A risc-v kernel.
 
+#![no_main]
 #![no_std]
 #![warn(
     clippy::all,

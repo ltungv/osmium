@@ -3,12 +3,16 @@ name = "osmium"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
+[[bin]]
 name = "osmium"
-crate-type = ["staticlib"]
-test = false
 bench = false
+doctest = false
+test = false
 
 [dependencies]
 bitflags = "2.13.1"
 spin = "0.12.1"
+
+[build-dependencies]
+cc = "1.0"
+
