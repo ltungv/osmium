@@ -48,7 +48,7 @@ SECTIONS {
 	.rodata : {
     . = ALIGN(4096);
 		PROVIDE(_rodata_addr = .);
-    ASSERT(_rodata_addr - _tramp_addr == 0x1000, "error: trampoline is larger than one page");
+    ASSERT(_rodata_addr - _tramp_addr == 0x1000, "trampoline is not a single page");
 		*(.srodata .srodata.*) *(.rodata .rodata.*)
 	} >ram AT>ram :text
 

@@ -12,7 +12,7 @@
 trampoline:
 
 .align 4
-.global usertrap
+.global uservec
 uservec:
   j uservec
 
