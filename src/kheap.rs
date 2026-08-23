@@ -31,12 +31,12 @@ unsafe impl GlobalAlloc for KernelHeap {
 static KHEAP: KernelHeap = KernelHeap(spin::Mutex::new(LinkedHeap::empty()));
 
 pub fn init() {
-    let mut kheap = KHEAP.0.lock();
     let ppn = kalloc::get()
         .lock()
         .alloc(64)
         .expect("physical memory should be available");
 
+    let mut kheap = KHEAP.0.lock();
     unsafe {
         kheap.init(
             VirtAddr::direct(ppn.addr()).as_ptr_mut::<u8>(),
