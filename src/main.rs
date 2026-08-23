@@ -4,24 +4,13 @@
 #![no_std]
 #![warn(
     clippy::all,
+    clippy::alloc_instead_of_core,
     clippy::missing_safety_doc,
-    clippy::nursery,
-    clippy::pedantic,
-    missing_debug_implementations,
+    clippy::std_instead_of_core,
+    clippy::undocumented_unsafe_blocks,
     missing_docs,
-    rust_2018_idioms,
-    rust_2021_compatibility,
-    rust_2024_compatibility,
     rustdoc::all
 )]
-
-mod addr;
-mod heap;
-mod kalloc;
-mod paging;
-mod proc;
-mod riscv;
-mod uart;
 
 use core::{
     arch::asm,
@@ -29,67 +18,13 @@ use core::{
     sync::atomic::{self, AtomicBool},
 };
 
-use crate::{
-    proc::cpuid,
+use osmium::{
+    BSS_ADDR, STACK_ADDR, kalloc, kheap, paging, println, proc,
     riscv::{
         r_menvcfg, r_mhartid, r_mstatus, r_sie, w_medeleg, w_menvcfg, w_mepc, w_mideleg, w_mstatus,
         w_pmpaddr0, w_pmpcfg0, w_satp, w_sie, w_tp,
     },
 };
-
-/// The size of a page in bytes.
-const PAGE_SIZE: usize = 4096;
-
-/// Address of the 16550 UART device on the `virt` machine in `QEMU`
-const UART_ADDR: usize = 0x1000_0000;
-
-unsafe extern "C" {
-    /// Address of the physical memory.
-    static MEM_ADDR: usize;
-
-    /// Size of the physical memory.
-    static MEM_SIZE: usize;
-
-    /// Memory address of the `.tramp` section.
-    static TRAMP_ADDR: usize;
-
-    /// Memory address of the `.rodata` section.
-    static RODATA_ADDR: usize;
-
-    /// Memory address of the `.data` section.
-    static DATA_ADDR: usize;
-
-    /// Memory address of the `.bss` section.
-    static BSS_ADDR: usize;
-
-    /// Memory address of the kernel's stack.
-    static STACK_ADDR: usize;
-
-    /// Memory address of the kernel's heap.
-    static HEAP_ADDR: usize;
-
-}
-
-/// Errors that occur when working with the page table.
-#[derive(Debug)]
-enum Error {
-    /// The kernel and/or its subsystems are in an invalid state.
-    InvalidState,
-
-    /// There's no memory left on the device for the kernel.
-    OutOfMemory,
-}
-
-impl core::error::Error for Error {}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::InvalidState => write!(f, "invalid state"),
-            Self::OutOfMemory => write!(f, "out of memory"),
-        }
-    }
-}
 
 // TODO: initialize the timer
 #[unsafe(no_mangle)]
@@ -134,18 +69,19 @@ extern "C" fn boot() {
 
 extern "C" fn main() {
     static INIT: AtomicBool = AtomicBool::new(false);
-    if cpuid() == 0 {
+    let cpuid = unsafe { proc::cpuid() };
+    if cpuid == 0 {
         println!();
         println!("osmium kernel is booting");
         println!();
-        // physical page allocator
+        // page allocator
         kalloc::init();
         // kernel page table
         paging::init();
         // enable paging
         paging::inithart();
-        // global rust allocator
-        heap::init();
+        // object allocator
+        kheap::init();
         // finish initialization
         INIT.store(true, atomic::Ordering::Release);
     } else {
@@ -156,18 +92,12 @@ extern "C" fn main() {
         // enable paging
         paging::inithart();
     }
-    println!("cpu#{} started", cpuid());
+    println!("cpu#{} started", cpuid);
     loop {
         core::hint::spin_loop();
     }
 }
 
-/// The lang item `eh_personality` is a function used by the failure mechanisms of the compiler.
-///
-/// This is often mapped to GCC’s personality function (see the std implementation for more
-/// information), but programs which don’t trigger a panic can be assured that this function is
-/// never called. Additionally, a `eh_catch_typeinfo` static is needed for certain targets which
-/// implement Rust panics on top of C++ exceptions.
 #[unsafe(no_mangle)]
 const extern "C" fn eh_personality() {}
 

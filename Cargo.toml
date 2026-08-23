@@ -3,6 +3,12 @@ name = "osmium"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "osmium"
+bench = false
+doctest = false
+test = false
+
 [[bin]]
 name = "osmium"
 bench = false
