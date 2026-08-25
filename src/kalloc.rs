@@ -12,10 +12,7 @@ static KALLOC: spin::Mutex<BuddyAlloc> = spin::Mutex::new(BuddyAlloc::empty());
 pub fn init() {
     let mut kalloc = KALLOC.lock();
     unsafe {
-        kalloc.init(
-            PhysAddr::new_trunc(HEAP_ADDR),
-            (MEM_ADDR + MEM_SIZE) - HEAP_ADDR,
-        );
+        kalloc.init(PhysAddr::new(HEAP_ADDR), (MEM_ADDR + MEM_SIZE) - HEAP_ADDR);
     }
 }
 
@@ -68,7 +65,7 @@ impl fmt::Debug for BuddyAlloc {
 impl BuddyAlloc {
     const fn empty() -> Self {
         Self {
-            addr: PhysPageNumber::new_trunc(0),
+            addr: PhysPageNumber::new(0),
             headers: &mut [],
             free_list: [const { None }; MAX_ORDER + 1],
         }

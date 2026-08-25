@@ -28,8 +28,8 @@ pub fn init() {
     let mut mapdirect = |addr: usize, size: usize, flags: PteFlags| {
         page_table
             .map(
-                VirtAddr::new_trunc(addr),
-                PhysAddr::new_trunc(addr),
+                VirtAddr::new(addr),
+                PhysAddr::new(addr),
                 size,
                 flags,
                 &mut kalloc::get().lock(),
@@ -315,7 +315,7 @@ struct PageTableEntry(usize);
 
 impl PageTableEntry {
     const fn ppn(self) -> PhysPageNumber {
-        PhysPageNumber::new_trunc(self.0 >> 10)
+        PhysPageNumber::new(self.0 >> 10)
     }
 
     const fn flags(self) -> PteFlags {
@@ -327,7 +327,7 @@ impl PageTableEntry {
         let mask = (1 << (lvl * 9)) - 1;
         let lower = vpn.get() & mask;
         let upper = ppn.get() & !mask;
-        PhysPageNumber::new_trunc(upper | lower)
+        PhysPageNumber::new(upper | lower)
     }
 
     const fn set_ppn(&mut self, ppn: PhysPageNumber) {
