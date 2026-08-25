@@ -3,14 +3,10 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use crate::{
-    PAGE_SIZE,
-    addr::{self, VirtAddr},
-    kalloc,
-};
+use crate::{PAGE_SIZE, kalloc, mem};
 
 fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
-    let addr = addr::align_up(ptr as usize, align);
+    let addr = mem::align_up(ptr as usize, align);
     addr as *mut u8
 }
 
@@ -38,10 +34,7 @@ pub fn init() {
 
     let mut kheap = KHEAP.0.lock();
     unsafe {
-        kheap.init(
-            VirtAddr::direct(ppn.addr()).as_ptr_mut::<u8>(),
-            PAGE_SIZE * 64,
-        );
+        kheap.init(ppn.addr().direct().as_ptr_mut::<u8>(), PAGE_SIZE * 64);
     }
 }
 
@@ -75,7 +68,7 @@ impl LinkedHeap {
         // the heap start address is shifted up a few bytes after alignment
         let aligned_offset = unsafe { aligned_node_ptr.offset_from_unsigned(ptr) };
         // calculate the number of usable bytes after aligning the start address and size
-        let heap_len = addr::align_down(size - aligned_offset, align_of::<Node>());
+        let heap_len = mem::align_down(size - aligned_offset, align_of::<Node>());
         assert!(
             heap_len >= size_of::<Node>(),
             "heap should have at least {} bytes",
@@ -177,7 +170,7 @@ impl Node {
         // the block's size and an optional pointer to the next free block
         // once occupied, the block is overwriten with the object described by the original layout
         let size = layout.size().max(size_of::<Self>());
-        let size = addr::align_up(size, align_of::<Self>());
+        let size = mem::align_up(size, align_of::<Self>());
         Layout::from_size_align(size, layout.align())
     }
 

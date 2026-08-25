@@ -2,7 +2,7 @@ use core::{fmt, slice};
 
 use crate::{
     HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE,
-    addr::{PhysAddr, PhysPageNumber, VirtAddr},
+    mem::{paddr::PhysAddr, ppn::PhysPageNumber},
 };
 
 const MAX_ORDER: usize = 12;
@@ -174,7 +174,7 @@ struct Header {
 
 impl Header {
     fn slice_from_ppn_mut(addr: PhysAddr, len: usize) -> &'static mut [Self] {
-        let headers_ptr = unsafe { VirtAddr::direct(addr).as_ptr_mut::<Self>() };
+        let headers_ptr = unsafe { addr.direct().as_ptr_mut::<Self>() };
         for i in 0..len {
             unsafe {
                 headers_ptr.add(i).write(Self::default());
