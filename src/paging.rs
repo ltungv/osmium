@@ -7,8 +7,8 @@ use bitflags::bitflags;
 use crate::{
     BSS_ADDR, DATA_ADDR, Error, HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, RODATA_ADDR, STACK_ADDR,
     TRAMP_ADDR, UART_ADDR,
-    addr::{PhysAddr, PhysPageNumber, VirtAddr, VirtPageNumber, align_down},
     kalloc::{self, BuddyAlloc},
+    mem::{align_down, paddr::PhysAddr, ppn::PhysPageNumber, vaddr::VirtAddr, vpn::VirtPageNumber},
     riscv::w_satp,
 };
 
@@ -271,13 +271,13 @@ impl PageTable {
 
     #[inline]
     const fn ptr_from_ppn(ppn: PhysPageNumber) -> *const Self {
-        let vaddr = unsafe { VirtAddr::direct(ppn.addr()) };
+        let vaddr = unsafe { ppn.addr().direct() };
         vaddr.as_ptr::<Self>()
     }
 
     #[inline]
     const fn ptr_mut_from_ppn(ppn: PhysPageNumber) -> *mut Self {
-        let vaddr = unsafe { VirtAddr::direct(ppn.addr()) };
+        let vaddr = unsafe { ppn.addr().direct() };
         vaddr.as_ptr_mut::<Self>()
     }
 }

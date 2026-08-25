@@ -1,7 +1,11 @@
 //! A risc-v kernel.
 
+#![cfg_attr(test, allow(unused))]
+#![feature(custom_test_frameworks)]
 #![no_main]
 #![no_std]
+#![reexport_test_harness_main = "kernel_test"]
+#![test_runner(test_runner)]
 #![warn(
     clippy::all,
     clippy::alloc_instead_of_core,
@@ -68,6 +72,39 @@ extern "C" fn boot() {
 }
 
 extern "C" fn main() {
+    #[cfg(test)]
+    {
+        let cpuid = unsafe { proc::cpuid() };
+        if cpuid == 0 {
+            kernel_test();
+        }
+    }
+
+    #[cfg(not(test))]
+    kernel_main();
+
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[unsafe(no_mangle)]
+const extern "C" fn eh_personality() {}
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    println!("aborting!");
+    if let Some(p) = info.location() {
+        println!("panic: {} ({}:{})", info.message(), p.file(), p.line());
+    } else {
+        println!("panic: no information available");
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+fn kernel_main() {
     static INIT: AtomicBool = AtomicBool::new(false);
     let cpuid = unsafe { proc::cpuid() };
     if cpuid == 0 {
@@ -93,25 +130,12 @@ extern "C" fn main() {
         paging::inithart();
     }
     println!("cpu#{} started", cpuid);
-    loop {
-        core::hint::spin_loop();
-    }
 }
 
-#[unsafe(no_mangle)]
-const extern "C" fn eh_personality() {}
-
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    println!("aborting!");
-    if let Some(p) = info.location() {
-        println!("panic: {} ({}:{})", info.message(), p.file(), p.line());
-    } else {
-        println!("panic: no information available");
-    }
-    loop {
-        unsafe {
-            asm!("wfi");
-        }
+#[cfg(test)]
+fn test_runner(tests: &[&dyn Fn()]) {
+    println!("running {} tests", tests.len());
+    for test in tests {
+        test();
     }
 }
