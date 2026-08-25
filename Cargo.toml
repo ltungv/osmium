@@ -13,7 +13,7 @@ test = false
 name = "osmium"
 bench = false
 doctest = false
-test = false
+test = true
 
 [dependencies]
 bitflags = "2.13.1"
