@@ -15,6 +15,12 @@ use crate::{
 static KERNEL_PAGE_TABLE: spin::Mutex<MappedPageTable<'static>> =
     spin::Mutex::new(MappedPageTable::empty());
 
+/// Initializes the global kernel page table.
+///
+/// This function allocates a physical page for the root page table and maps all
+/// kernel memory regions (e.g., `.text`, `.rodata`, `.data`, heap, stack, and UART)
+/// with the appropriate permissions. It must be called once during boot before
+/// enabling paging.
 pub fn init() {
     let mut page_table = KERNEL_PAGE_TABLE.lock();
     unsafe {
@@ -71,6 +77,11 @@ pub fn init() {
     }
 }
 
+/// Initializes the hardware page table register for the current hart (CPU).
+///
+/// This function configures the `satp` register with the root page table's
+/// physical page number and enables the Sv39 paging scheme. It also flushes
+/// the TLB to ensure stale entries are removed. It must be called by each CPU.
 pub fn inithart() {
     let satp = KERNEL_PAGE_TABLE.lock().satp();
     unsafe {
@@ -84,6 +95,11 @@ pub fn inithart() {
     }
 }
 
+/// A high-level abstraction over a RISC-V page table.
+///
+/// It encapsulates the root physical page number and provides safe methods
+/// to map and unmap virtual addresses to physical addresses using a 3-level
+/// radix tree (Sv39).
 struct MappedPageTable<'t> {
     ppn: Option<PhysPageNumber>,
     _phantom: PhantomData<Option<&'t mut PageTable>>,
@@ -149,10 +165,14 @@ impl MappedPageTable<'_> {
     }
 }
 
+/// A RISC-V page table node.
+///
+/// Under Sv39, each page table node contains 512 page table entries (PTEs)
+/// and occupies exactly one 4096-byte physical page.
 #[repr(C)]
 #[repr(align(4096))]
 #[derive(Debug)]
-struct PageTable([PageTableEntry; 4096]);
+struct PageTable([PageTableEntry; 512]);
 
 impl PageTable {
     fn map(
@@ -271,6 +291,10 @@ impl PageTable {
 }
 
 bitflags! {
+    /// Flags for a RISC-V Page Table Entry (PTE).
+    ///
+    /// These flags control the permissions (Read, Write, Execute) and state
+    /// (Valid, User, Global, Accessed, Dirty) of a memory page.
     #[derive(Clone, Copy)]
     struct PteFlags: usize {
         /// Valid bit.
@@ -298,6 +322,11 @@ impl PteFlags {
     }
 }
 
+/// A RISC-V Page Table Entry (PTE).
+///
+/// A PTE contains the physical page number (PPN) of either the next level
+/// page table or the actual mapped physical frame. It also contains flags
+/// describing the mapping's permissions and state.
 #[derive(Debug, Default, Clone, Copy)]
 struct PageTableEntry(usize);
 

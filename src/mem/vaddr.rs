@@ -12,10 +12,25 @@ use crate::{
 /// On `riscv64`, under sv39 paging scheme, only the 39 lower bits of a virtual address are used.
 /// The address is sign-extended, i.e., all top bits must equal bit 38. This type guarantees that
 /// it always represents a valid virtual address.
+///
+/// By encapsulating the address in a type, we ensure that address manipulations
+/// (like alignment and offset calculations) are checked for validity, preventing bugs
+/// caused by invalid address bit patterns.
+///
+/// # Examples
+/// ```
+/// let addr = VirtAddr::new(0x2000);
+/// assert_eq!(addr.page_offset(), 0);
+/// assert_eq!(addr.page_number().get(), 2);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtAddr(usize);
 
 impl VirtAddr {
+    /// The number of valid lower bits in a virtual address under the Sv39 paging scheme.
+    ///
+    /// Sv39 uses 39-bit virtual addresses, meaning the top 25 bits must be copies of bit 38
+    /// (sign-extended) to form a valid 64-bit address.
     pub const BITS: usize = 39;
 
     /// Create a new virtual address, asserting that the address is sign-extended.

@@ -1,3 +1,8 @@
+//! Kernel heap allocator.
+//!
+//! This module provides a dynamic memory allocator for the kernel heap, allowing
+//! arbitrary-sized allocations (e.g., for `Box`, `Vec`, and `String`).
+
 use core::{
     alloc::{GlobalAlloc, Layout, LayoutError},
     ptr::{self, NonNull},
@@ -10,6 +15,11 @@ fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
     addr as *mut u8
 }
 
+/// A global allocator for the kernel heap.
+///
+/// This struct wraps a [`LinkedHeap`] in a `spin::Mutex` to provide thread-safe
+/// dynamic memory allocation. It implements the [`GlobalAlloc`] trait, which
+/// allows the kernel to use Rust's standard `alloc` crate.
 struct KernelHeap(spin::Mutex<LinkedHeap>);
 
 unsafe impl GlobalAlloc for KernelHeap {
@@ -26,6 +36,12 @@ unsafe impl GlobalAlloc for KernelHeap {
 
 static KHEAP: KernelHeap = KernelHeap(spin::Mutex::new(LinkedHeap::empty()));
 
+/// Initializes the kernel heap.
+///
+/// This function requests a large block of physical memory (currently 64 pages)
+/// from the global physical memory allocator ([`Kmem`]) and initializes the
+/// global `KernelHeap` with it. It must be called once during boot before
+/// any dynamic memory allocation is performed.
 pub fn init() {
     let ppn = Kmem::get()
         .alloc(64)
@@ -40,7 +56,9 @@ pub fn init() {
 /// A simple byte-level allocator.
 ///
 /// Free memory blocks are kept track using a linked list backed by the same memory blocks that are
-/// being given out.
+/// being given out. We use a linked-list allocator here because it is simple and sufficient
+/// for arbitrary-sized heap allocations, while the buddy allocator (`BuddyAlloc`)
+/// is used for page-aligned frame allocations.
 struct LinkedHeap {
     head: Node,
     info: Info,
