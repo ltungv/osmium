@@ -23,7 +23,9 @@ use core::{
 };
 
 use osmium::{
-    BSS_ADDR, STACK_ADDR, kalloc, kheap, paging, println, proc,
+    BSS_ADDR, STACK_ADDR,
+    kalloc::Kmem,
+    kheap, paging, println, proc,
     riscv::{
         r_menvcfg, r_mhartid, r_mstatus, r_sie, w_medeleg, w_menvcfg, w_mepc, w_mideleg, w_mstatus,
         w_pmpaddr0, w_pmpcfg0, w_satp, w_sie, w_tp,
@@ -112,7 +114,7 @@ fn kernel_main() {
         println!("osmium kernel is booting");
         println!();
         // page allocator
-        kalloc::init();
+        Kmem::init();
         // kernel page table
         paging::init();
         // enable paging

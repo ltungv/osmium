@@ -25,7 +25,7 @@ impl PhysPageNumber {
         Self::new_checked(ppn).expect("invalid physical page number")
     }
 
-    /// Create a new physical page number, returning `None` if the higher 20 bits are not zero.
+    /// Create a new physical page number, returning [`None`] if the higher 20 bits are not zero.
     pub const fn new_checked(ppn: usize) -> Option<Self> {
         let mask = (1 << Self::BITS) - 1;
         if ppn == ppn & mask {
@@ -35,7 +35,7 @@ impl PhysPageNumber {
         }
     }
 
-    /// Get the physical page number as a `usize` value.
+    /// Get the physical page number as a [`usize`] value.
     pub const fn get(self) -> usize {
         self.0
     }

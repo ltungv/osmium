@@ -7,7 +7,7 @@ use bitflags::bitflags;
 use crate::{
     BSS_ADDR, DATA_ADDR, Error, HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, RODATA_ADDR, STACK_ADDR,
     TRAMP_ADDR, UART_ADDR,
-    kalloc::{self, BuddyAlloc},
+    kalloc::Kmem,
     mem::{align_down, paddr::PhysAddr, ppn::PhysPageNumber, vaddr::VirtAddr, vpn::VirtPageNumber},
     riscv::w_satp,
 };
@@ -19,8 +19,7 @@ pub fn init() {
     let mut page_table = KERNEL_PAGE_TABLE.lock();
     unsafe {
         page_table.init(
-            kalloc::get()
-                .lock()
+            Kmem::get()
                 .alloc(1)
                 .expect("physical memory should be available"),
         );
@@ -32,7 +31,7 @@ pub fn init() {
                 PhysAddr::new(addr),
                 size,
                 flags,
-                &mut kalloc::get().lock(),
+                Kmem::get(),
             )
             .expect("address should be mapped");
     };
@@ -120,18 +119,18 @@ impl MappedPageTable<'_> {
         paddr: PhysAddr,
         size: usize,
         flags: PteFlags,
-        allocator: &mut BuddyAlloc,
+        kmem: &Kmem,
     ) -> Result<(), Error> {
         self.page_table_mut()
             .ok_or(Error::InvalidState)?
-            .map(vaddr, paddr, size, flags, allocator)
+            .map(vaddr, paddr, size, flags, kmem)
     }
 
-    fn unmap(&mut self, allocator: &mut BuddyAlloc) {
+    fn unmap(&mut self, kmem: &Kmem) {
         let Some(page_table) = self.page_table_mut() else {
             return;
         };
-        page_table.unmap(allocator);
+        page_table.unmap(kmem);
     }
 
     fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
@@ -162,7 +161,7 @@ impl PageTable {
         paddr: PhysAddr,
         size: usize,
         flags: PteFlags,
-        allocator: &mut BuddyAlloc,
+        kmem: &Kmem,
     ) -> Result<(), Error> {
         assert_ne!(size, 0, "size should not be zero");
         assert_eq!(
@@ -178,7 +177,7 @@ impl PageTable {
             let indices = vpn.indices();
             let mut pte = &mut self.0[indices[2]];
             for &index_next in indices[..2].iter().rev() {
-                let page_table = Self::create(pte, allocator)?;
+                let page_table = Self::create(pte, kmem)?;
                 pte = &mut page_table.0[index_next];
             }
             assert!(
@@ -193,7 +192,7 @@ impl PageTable {
         Ok(())
     }
 
-    fn unmap(&mut self, allocator: &mut BuddyAlloc) {
+    fn unmap(&mut self, kmem: &Kmem) {
         for lvl2_pte in &mut self.0 {
             let lvl2_pte_flags = lvl2_pte.flags();
             if !lvl2_pte_flags.contains(PteFlags::V) || lvl2_pte_flags.is_leaf() {
@@ -208,10 +207,10 @@ impl PageTable {
                 }
                 let lvl0_ppn = lvl1_pte.ppn();
                 *lvl1_pte = PageTableEntry::default();
-                allocator.dealloc(lvl0_ppn);
+                kmem.dealloc(lvl0_ppn);
             }
             *lvl2_pte = PageTableEntry::default();
-            allocator.dealloc(lvl1_ppn);
+            kmem.dealloc(lvl1_ppn);
         }
     }
 
@@ -224,22 +223,14 @@ impl PageTable {
             if !flags.contains(PteFlags::V) {
                 break;
             }
-            // according to risc-v, a leaf can be at any level
             if flags.is_leaf() {
-                // only ppn[2:leaf-level] will be used to develop the physical address
-                // if a level 2's page table entry is a leaf, only ppn[2] contribytes to the
-                // physical address
-                // vpn[1] is copied to ppn[1], vpn[0] is copied to ppn[0], and the page offset is
-                // copied as normal
                 let ppn = pte.translate(vpn, lvl);
                 let paddr = ppn.addr().wrapping_add(vaddr.page_offset());
                 return Some(paddr);
             }
-            // at level 0, a valid non-leaf pte means the table is malformed
             if lvl == 0 {
                 break;
             }
-            // go to the next entry
             let page_table = unsafe { pte.unchecked_next_table() };
             pte = &page_table.0[indices[lvl - 1]];
         }
@@ -255,12 +246,9 @@ impl PageTable {
         }
     }
 
-    fn create<'e>(
-        pte: &'e mut PageTableEntry,
-        allocator: &mut BuddyAlloc,
-    ) -> Result<&'e mut Self, Error> {
+    fn create<'e>(pte: &'e mut PageTableEntry, kmem: &Kmem) -> Result<&'e mut Self, Error> {
         if !pte.flags().contains(PteFlags::V) {
-            let ppn = allocator.alloc(0).ok_or(Error::OutOfMemory)?;
+            let ppn = kmem.alloc(0).ok_or(Error::OutOfMemory)?;
             Self::init(ppn);
             pte.set_ppn(ppn);
             pte.set_flags(PteFlags::V);
