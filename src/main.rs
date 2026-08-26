@@ -33,6 +33,10 @@ use osmium::{
 };
 
 // TODO: initialize the timer
+/// The assembly entry point for the kernel.
+///
+/// This function sets up the basic CPU state (e.g., privilege mode, interrupts, memory protection,
+/// and paging) before jumping to the main Rust entry point (`main`).
 #[unsafe(no_mangle)]
 extern "C" fn boot() {
     unsafe {
@@ -73,6 +77,10 @@ extern "C" fn boot() {
     }
 }
 
+/// The main Rust entry point of the kernel.
+///
+/// This function is called by the `boot` assembly code. It routes execution to the
+/// test runner if tests are enabled, or to `kernel_main` for normal operation.
 extern "C" fn main() {
     #[cfg(test)]
     {
@@ -106,6 +114,11 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     }
 }
 
+/// The main initialization sequence for the kernel.
+///
+/// This function initializes memory allocators, page tables, and other core subsystems.
+/// CPU 0 performs the global initialization, while other CPUs wait until it completes
+/// before setting up their own local states.
 fn kernel_main() {
     static INIT: AtomicBool = AtomicBool::new(false);
     let cpuid = unsafe { proc::cpuid() };

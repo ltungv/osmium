@@ -1,3 +1,5 @@
+//! Process management and CPU identification.
+
 use crate::riscv::r_tp;
 
 /// Get the hardware thread id of the currently executing thread.

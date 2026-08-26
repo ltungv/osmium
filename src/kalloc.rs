@@ -5,7 +5,7 @@
 //! allocation requests with blocks whose sizes are the smallest power of two that is greater than
 //! or equal to the requested size.
 //!
-//! The maximum allocation order is defined by [`MAX_ORDER`], which is 12. As a result, the allocator
+//! The maximum allocation order is defined by `MAX_ORDER`, which is 12. As a result, the allocator
 //! can allocate up to 4096 contiguous frames at once.
 
 use core::{fmt, slice};

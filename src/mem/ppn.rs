@@ -18,6 +18,9 @@ pub struct PhysPageNumber(usize);
 
 impl PhysPageNumber {
     /// The number of valid lower bits in a physical page number.
+    ///
+    /// Since physical addresses are 56 bits and page offsets are 12 bits, the physical
+    /// page number occupies the remaining 44 bits.
     pub const BITS: usize = 44;
 
     /// Create a new physical page number, asserting that the higher 20 bits are zero.

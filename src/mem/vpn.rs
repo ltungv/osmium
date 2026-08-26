@@ -13,6 +13,10 @@ use crate::mem::vaddr::VirtAddr;
 pub struct VirtPageNumber(usize);
 
 impl VirtPageNumber {
+    /// The number of valid lower bits in a virtual page number under the Sv39 paging scheme.
+    ///
+    /// Since Sv39 uses 39-bit virtual addresses and 12-bit page offsets, the virtual page
+    /// number consists of the remaining 27 bits.
     const BITS: usize = 27;
 
     /// Create a new virtual page number, asserting that the higher 37 bits are zero.

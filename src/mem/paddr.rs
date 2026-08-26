@@ -11,10 +11,24 @@ use crate::{
 ///
 /// On `riscv64`, only the 56 lower bits of a physical address are used. The top 8 bits
 /// must be zero. This type guarantees that it always represents a valid physical address.
+///
+/// Using a distinct type for physical addresses prevents accidentally mixing them
+/// with virtual addresses, enhancing type safety across the kernel memory subsystem.
+///
+/// # Examples
+///
+/// ```
+/// let addr = PhysAddr::new(0x8000_0000);
+/// let aligned = addr.align_up(4096);
+/// assert_eq!(aligned, addr);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysAddr(usize);
 
 impl PhysAddr {
+    /// The number of valid lower bits in a physical address.
+    ///
+    /// On `riscv64`, physical addresses are at most 56 bits wide. The upper 8 bits must be zero.
     const BITS: usize = 56;
 
     /// Assume this physical address is directly mapped to a virtual address of the same value.
