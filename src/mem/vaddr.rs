@@ -23,7 +23,7 @@ impl VirtAddr {
         Self::new_checked(addr).expect("invalid virtual address")
     }
 
-    /// Create a new virtual address, returning `None` if the address is not sign-extended.
+    /// Create a new virtual address, returning [`None`] if the address is not sign-extended.
     pub const fn new_checked(addr: usize) -> Option<Self> {
         let shift = usize::BITS as usize - Self::BITS;
         let trunc = ((addr << shift).cast_signed() >> shift).cast_unsigned();

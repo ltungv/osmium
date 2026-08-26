@@ -20,7 +20,7 @@ impl VirtPageNumber {
         Self::new_checked(vpn).expect("invalid virtual page number")
     }
 
-    /// Create a new virtual page number, returning `None` if the higher 37 bits are not zero.
+    /// Create a new virtual page number, returning [`None`] if the higher 37 bits are not zero.
     pub const fn new_checked(vpn: usize) -> Option<Self> {
         let mask = (1 << Self::BITS) - 1;
         if vpn == vpn & mask {
@@ -30,7 +30,7 @@ impl VirtPageNumber {
         }
     }
 
-    /// Get the virtual page number as a `usize` value.
+    /// Get the virtual page number as a [`usize`] value.
     pub const fn get(self) -> usize {
         self.0
     }

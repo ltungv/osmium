@@ -142,7 +142,7 @@ impl Uart16550 {
         true
     }
 
-    /// Try to get a byte from the receiver holding register, returning `None` if no byte is ready
+    /// Try to get a byte from the receiver holding register, returning [`None`] if no byte is ready
     /// to be read.
     fn try_get(&mut self) -> Option<u8> {
         if self.read_from(Self::LSR) & (1 << 0) == 0 {

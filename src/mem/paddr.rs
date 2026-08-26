@@ -32,7 +32,7 @@ impl PhysAddr {
         Self::new_checked(addr).expect("invalid physical address")
     }
 
-    /// Creates a new physical address, returning `None` if the higher 8 bits are non-zero.
+    /// Creates a new physical address, returning [`None`] if the higher 8 bits are non-zero.
     pub const fn new_checked(addr: usize) -> Option<Self> {
         let mask = (1 << Self::BITS) - 1;
         if addr == addr & mask {

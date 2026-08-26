@@ -3,7 +3,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use crate::{PAGE_SIZE, kalloc, mem};
+use crate::{PAGE_SIZE, kalloc::Kmem, mem};
 
 fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
     let addr = mem::align_up(ptr as usize, align);
@@ -27,8 +27,7 @@ unsafe impl GlobalAlloc for KernelHeap {
 static KHEAP: KernelHeap = KernelHeap(spin::Mutex::new(LinkedHeap::empty()));
 
 pub fn init() {
-    let ppn = kalloc::get()
-        .lock()
+    let ppn = Kmem::get()
         .alloc(64)
         .expect("physical memory should be available");
 
@@ -164,7 +163,7 @@ impl Node {
         Info::new(core::ptr::from_ref(self).cast_mut().cast(), self.size)
     }
 
-    /// Adjust the layout such that the resulting memory block can also be used to store a `Node`.
+    /// Adjust the layout such that the resulting memory block can also be used to store a [`Node`].
     fn align_layout(layout: Layout) -> Result<Layout, LayoutError> {
         // when a memory block is free, a `node` is stored at the beginning of the block to hold
         // the block's size and an optional pointer to the next free block
