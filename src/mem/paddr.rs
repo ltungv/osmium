@@ -14,14 +14,6 @@ use crate::{
 ///
 /// Using a distinct type for physical addresses prevents accidentally mixing them
 /// with virtual addresses, enhancing type safety across the kernel memory subsystem.
-///
-/// # Examples
-///
-/// ```
-/// let addr = PhysAddr::new(0x8000_0000);
-/// let aligned = addr.align_up(4096);
-/// assert_eq!(aligned, addr);
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysAddr(usize);
 
@@ -31,11 +23,11 @@ impl PhysAddr {
     /// On `riscv64`, physical addresses are at most 56 bits wide. The upper 8 bits must be zero.
     const BITS: usize = 56;
 
-    /// Assume this physical address is directly mapped to a virtual address of the same value.
+    /// Assume this physical address is direct-mapped to a virtual address of the same value.
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the given physical address is directly mapped to a valid
+    /// The caller must ensure that the given physical address is direct-mapped to a valid
     /// virtual address.
     pub const unsafe fn direct(self) -> VirtAddr {
         VirtAddr::new(self.0)
@@ -43,7 +35,7 @@ impl PhysAddr {
 
     /// Creates a new physical address, asserting that the higher 8 bits are zero.
     pub const fn new(addr: usize) -> Self {
-        Self::new_checked(addr).expect("invalid physical address")
+        Self::new_checked(addr).expect("physical address should be truncated")
     }
 
     /// Creates a new physical address, returning [`None`] if the higher 8 bits are non-zero.

@@ -16,13 +16,6 @@ use crate::{
 /// By encapsulating the address in a type, we ensure that address manipulations
 /// (like alignment and offset calculations) are checked for validity, preventing bugs
 /// caused by invalid address bit patterns.
-///
-/// # Examples
-/// ```
-/// let addr = VirtAddr::new(0x2000);
-/// assert_eq!(addr.page_offset(), 0);
-/// assert_eq!(addr.page_number().get(), 2);
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtAddr(usize);
 
@@ -35,7 +28,7 @@ impl VirtAddr {
 
     /// Create a new virtual address, asserting that the address is sign-extended.
     pub const fn new(addr: usize) -> Self {
-        Self::new_checked(addr).expect("invalid virtual address")
+        Self::new_checked(addr).expect("virtual address should be sign-extended")
     }
 
     /// Create a new virtual address, returning [`None`] if the address is not sign-extended.

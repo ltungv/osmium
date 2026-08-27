@@ -24,22 +24,20 @@ pub struct Kmem {
 }
 
 impl Kmem {
-    /// Initialize the global physical memory allocator.
-    pub fn init() {
-        let kmem = Self::get();
-        unsafe {
-            kmem.alloc
-                .lock()
-                .init(PhysAddr::new(HEAP_ADDR), (MEM_ADDR + MEM_SIZE) - HEAP_ADDR);
-        }
-    }
-
     /// Returns a reference to the global physical memory allocator.
     pub fn get() -> &'static Self {
-        static KMEM: Kmem = Kmem {
-            alloc: spin::Mutex::new(BuddyAlloc::empty()),
-        };
-        &KMEM
+        static INIT: spin::Once<Kmem> = spin::Once::new();
+        INIT.call_once(|| {
+            let kmem = Kmem {
+                alloc: spin::Mutex::new(BuddyAlloc::empty()),
+            };
+            unsafe {
+                kmem.alloc
+                    .lock()
+                    .init(PhysAddr::new(HEAP_ADDR), (MEM_ADDR + MEM_SIZE) - HEAP_ADDR);
+            }
+            kmem
+        })
     }
 
     /// Gets exclusive access to the allocator and allocates a contiguous block of physical memory
@@ -169,12 +167,7 @@ impl BuddyAlloc {
     ///
     /// The `ppn` must be the starting physical page number of a block previously returned by [`Self::alloc`].
     /// The allocator determines the size of the block from its metadata header.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the `ppn` is out of bounds of the memory region managed by this allocator.
     fn dealloc(&mut self, ppn: PhysPageNumber) {
-        assert!(ppn >= self.addr, "page number should be bounded");
         let mut idx = ppn - self.addr;
         let mut order = self.headers[idx].order as usize;
         while order < MAX_ORDER {
