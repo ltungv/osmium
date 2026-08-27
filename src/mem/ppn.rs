@@ -2,7 +2,7 @@
 
 use core::{fmt, ops};
 
-use crate::mem::paddr::PhysAddr;
+use crate::{mem::paddr::PhysAddr, paging::page_table::PageTable};
 
 /// A physical page number.
 ///
@@ -25,7 +25,7 @@ impl PhysPageNumber {
 
     /// Create a new physical page number, asserting that the higher 20 bits are zero.
     pub const fn new(ppn: usize) -> Self {
-        Self::new_checked(ppn).expect("invalid physical page number")
+        Self::new_checked(ppn).expect("physical page number should be truncated")
     }
 
     /// Create a new physical page number, returning [`None`] if the higher 20 bits are not zero.
@@ -46,6 +46,36 @@ impl PhysPageNumber {
     /// Get the physical address of this page.
     pub const fn addr(self) -> PhysAddr {
         PhysAddr::new(self.0 << 12)
+    }
+
+    /// Get a constant reference to the [`PageTable`] stored at this physical page number
+    ///
+    /// # Safety
+    ///
+    /// * It must hold that the system's physical memory is available in the kernel's virtual
+    ///   address space through a direct-map.
+    /// * It must hold that the system's physical memory at the address given by this page number
+    ///   holds data of a valid and initialized PageTable.
+    pub unsafe fn page_table(self) -> &'static PageTable {
+        let paddr = self.addr();
+        let vaddr = unsafe { paddr.direct() };
+        let ptr = vaddr.as_ptr();
+        unsafe { &*ptr }
+    }
+
+    /// Get a mutable reference to the [`PageTable`] stored at this physical page number
+    ///
+    /// # Safety
+    ///
+    /// * It must hold that the system's physical memory is available in the kernel's virtual
+    ///   address space through a direct-map.
+    /// * It must hold that the system's physical memory at the address given by this page number
+    ///   holds data of a valid and initialized PageTable.
+    pub unsafe fn page_table_mut(self) -> &'static mut PageTable {
+        let paddr = self.addr();
+        let vaddr = unsafe { paddr.direct() };
+        let ptr = vaddr.as_ptr_mut();
+        unsafe { &mut *ptr }
     }
 }
 

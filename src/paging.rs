@@ -1,96 +1,82 @@
-//! An implementation of the Sv39 page-based 39-bit virtual-memory system.
+//! Page-based virtual memory system.
 
-use core::{arch::asm, marker::PhantomData};
+pub mod page_table;
+pub mod sv39;
 
-use bitflags::bitflags;
+use core::{arch::asm, fmt};
 
 use crate::{
     BSS_ADDR, DATA_ADDR, Error, HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, RODATA_ADDR, STACK_ADDR,
     TRAMP_ADDR, UART_ADDR,
     kalloc::Kmem,
-    mem::{align_down, paddr::PhysAddr, ppn::PhysPageNumber, vaddr::VirtAddr, vpn::VirtPageNumber},
+    mem::{paddr::PhysAddr, vaddr::VirtAddr},
+    paging::{page_table::PteFlags, sv39::Sv39},
     riscv::w_satp,
 };
-
-static KERNEL_PAGE_TABLE: spin::Mutex<MappedPageTable<'static>> =
-    spin::Mutex::new(MappedPageTable::empty());
-
-/// Initializes the global kernel page table.
-///
-/// This function allocates a physical page for the root page table and maps all
-/// kernel memory regions (e.g., `.text`, `.rodata`, `.data`, heap, stack, and UART)
-/// with the appropriate permissions. It must be called once during boot before
-/// enabling paging.
-pub fn init() {
-    let mut page_table = KERNEL_PAGE_TABLE.lock();
-    unsafe {
-        page_table.init(
-            Kmem::get()
-                .alloc(1)
-                .expect("physical memory should be available"),
-        );
-    }
-    let mut mapdirect = |addr: usize, size: usize, flags: PteFlags| {
-        page_table
-            .map(
-                VirtAddr::new(addr),
-                PhysAddr::new(addr),
-                size,
-                flags,
-                Kmem::get(),
-            )
-            .expect("address should be mapped");
-    };
-    // uart memory mapped registers
-    mapdirect(UART_ADDR, PAGE_SIZE, PteFlags::R | PteFlags::W);
-    unsafe {
-        // .text section
-        mapdirect(MEM_ADDR, TRAMP_ADDR - MEM_ADDR, PteFlags::R | PteFlags::X);
-        // .tramp section
-        mapdirect(
-            TRAMP_ADDR,
-            RODATA_ADDR - TRAMP_ADDR,
-            PteFlags::R | PteFlags::X,
-        );
-        // .rodata section
-        mapdirect(
-            RODATA_ADDR,
-            DATA_ADDR - RODATA_ADDR,
-            PteFlags::R | PteFlags::X,
-        );
-        // .data section
-        mapdirect(DATA_ADDR, BSS_ADDR - DATA_ADDR, PteFlags::R | PteFlags::W);
-        // .bss section
-        mapdirect(BSS_ADDR, STACK_ADDR - BSS_ADDR, PteFlags::R | PteFlags::W);
-        // kernel's stack
-        mapdirect(
-            STACK_ADDR,
-            HEAP_ADDR - STACK_ADDR,
-            PteFlags::R | PteFlags::W,
-        );
-        // kernel's heap
-        mapdirect(
-            HEAP_ADDR,
-            (MEM_ADDR + MEM_SIZE) - HEAP_ADDR,
-            PteFlags::R | PteFlags::W,
-        );
-    }
-}
 
 /// Initializes the hardware page table register for the current hart (CPU).
 ///
 /// This function configures the `satp` register with the root page table's
 /// physical page number and enables the Sv39 paging scheme. It also flushes
 /// the TLB to ensure stale entries are removed. It must be called by each CPU.
-pub fn inithart() {
-    let satp = KERNEL_PAGE_TABLE.lock().satp();
+pub fn kvminit() {
+    static KVM: spin::Once<MappedPageTable> = spin::Once::new();
+    let kvm = KVM.call_once(|| {
+        let kmem = Kmem::get();
+        let mut table = Sv39::new(kmem).expect("physical memory should be available");
+        let mut mapdirect = |addr: usize, size: usize, flags: PteFlags| -> Result<(), Error> {
+            table.map(VirtAddr::new(addr), PhysAddr::new(addr), size, flags, kmem)
+        };
+
+        mapdirect(UART_ADDR, PAGE_SIZE, PteFlags::R | PteFlags::W)
+            .expect("uart registers should be mapped");
+
+        unsafe {
+            mapdirect(MEM_ADDR, TRAMP_ADDR - MEM_ADDR, PteFlags::R | PteFlags::X)
+                .expect(".text section should be mapped");
+
+            mapdirect(
+                TRAMP_ADDR,
+                RODATA_ADDR - TRAMP_ADDR,
+                PteFlags::R | PteFlags::X,
+            )
+            .expect(".tramp section should be mapped");
+
+            mapdirect(
+                RODATA_ADDR,
+                DATA_ADDR - RODATA_ADDR,
+                PteFlags::R | PteFlags::X,
+            )
+            .expect(".rodata section should be mapped");
+
+            mapdirect(DATA_ADDR, BSS_ADDR - DATA_ADDR, PteFlags::R | PteFlags::W)
+                .expect(".data section should be mapped");
+
+            mapdirect(BSS_ADDR, STACK_ADDR - BSS_ADDR, PteFlags::R | PteFlags::W)
+                .expect(".bss section should be mapped");
+
+            mapdirect(
+                STACK_ADDR,
+                HEAP_ADDR - STACK_ADDR,
+                PteFlags::R | PteFlags::W,
+            )
+            .expect("kernel's stack section should be mapped");
+
+            mapdirect(
+                HEAP_ADDR,
+                (MEM_ADDR + MEM_SIZE) - HEAP_ADDR,
+                PteFlags::R | PteFlags::W,
+            )
+            .expect("kernel's heap section should be mapped");
+        }
+        MappedPageTable::new(table)
+    });
     unsafe {
         // wait for any previous writes to the page table memory to finish
         asm!("sfence.vma");
-        {
-            w_satp(satp);
-        }
-        // flush stale entries from the tlb
+        // write to the satp register
+        w_satp(kvm.satp());
+        // flush stale entries from the translation lookaside buffer
         asm!("sfence.vma");
     }
 }
@@ -100,272 +86,72 @@ pub fn inithart() {
 /// It encapsulates the root physical page number and provides safe methods
 /// to map and unmap virtual addresses to physical addresses using a 3-level
 /// radix tree (Sv39).
-struct MappedPageTable<'t> {
-    ppn: Option<PhysPageNumber>,
-    _phantom: PhantomData<Option<&'t mut PageTable>>,
-}
+pub struct MappedPageTable<'t>(spin::Mutex<Sv39<'t>>);
 
-impl MappedPageTable<'static> {
-    const fn empty() -> Self {
-        Self {
-            ppn: None,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl MappedPageTable<'_> {
-    unsafe fn init(&mut self, ppn: PhysPageNumber) {
-        PageTable::init(ppn);
-        self.ppn = Some(ppn);
+impl<'t> MappedPageTable<'t> {
+    fn new(page_table: Sv39<'t>) -> Self {
+        Self(spin::Mutex::new(page_table))
     }
 
-    const fn satp(&self) -> usize {
-        let ppn = if let Some(ppn) = self.ppn {
-            ppn.get()
-        } else {
-            0
-        };
-        8 << 60 | ppn
+    fn satp(&self) -> usize {
+        let page_table = self.0.lock();
+        page_table.satp()
     }
 
-    fn map(
-        &mut self,
+    /// Translate the given virtual address into the physical address that was mapped to it.
+    pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
+        let page_table = self.0.lock();
+        page_table.translate(vaddr)
+    }
+
+    /// Map the given virtual address to the given physical address.
+    pub fn map(
+        &self,
         vaddr: VirtAddr,
         paddr: PhysAddr,
         size: usize,
         flags: PteFlags,
         kmem: &Kmem,
     ) -> Result<(), Error> {
-        self.page_table_mut()
-            .ok_or(Error::InvalidState)?
-            .map(vaddr, paddr, size, flags, kmem)
+        let mut page_table = self.0.lock();
+        page_table.map(vaddr, paddr, size, flags, kmem)
     }
 
-    fn unmap(&mut self, kmem: &Kmem) {
-        let Some(page_table) = self.page_table_mut() else {
-            return;
-        };
+    /// Unmap all previously mapped virtual addresses.
+    pub fn unmap(&mut self, kmem: &Kmem) {
+        let mut page_table = self.0.lock();
         page_table.unmap(kmem);
     }
-
-    fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        self.page_table()?.translate(vaddr)
-    }
-
-    fn page_table(&self) -> Option<&PageTable> {
-        let ppn = self.ppn?;
-        Some(unsafe { &*PageTable::ptr_from_ppn(ppn) })
-    }
-
-    #[expect(clippy::needless_pass_by_ref_mut)]
-    fn page_table_mut(&mut self) -> Option<&mut PageTable> {
-        let ppn = self.ppn?;
-        Some(unsafe { &mut *PageTable::ptr_mut_from_ppn(ppn) })
-    }
 }
 
-/// A RISC-V page table node.
-///
-/// Under Sv39, each page table node contains 512 page table entries (PTEs)
-/// and occupies exactly one 4096-byte physical page.
-#[repr(C)]
-#[repr(align(4096))]
+/// Error from mapping virtual addresses to physical addresses.
 #[derive(Debug)]
-struct PageTable([PageTableEntry; 512]);
+pub enum MappingError {
+    /// The given virtual address is invalid.
+    BadAddress(VirtAddr),
 
-impl PageTable {
-    fn map(
-        &mut self,
-        vaddr: VirtAddr,
-        paddr: PhysAddr,
-        size: usize,
-        flags: PteFlags,
-        kmem: &Kmem,
-    ) -> Result<(), Error> {
-        assert_ne!(size, 0, "size should not be zero");
-        assert_eq!(
-            size,
-            align_down(size, PAGE_SIZE),
-            "size should be page-aligned"
-        );
-        let mut vpn = vaddr.page_number();
-        let mut ppn = paddr.page_number();
-        assert_eq!(vaddr, vpn.addr(), "virtual address should be page-aligned");
-        let end = vaddr.wrapping_add(size).align_up(PAGE_SIZE).page_number();
-        while vpn < end {
-            let indices = vpn.indices();
-            let mut pte = &mut self.0[indices[2]];
-            for &index_next in indices[..2].iter().rev() {
-                let page_table = Self::create(pte, kmem)?;
-                pte = &mut page_table.0[index_next];
-            }
-            assert!(
-                !pte.flags().contains(PteFlags::V),
-                "address should not be remapped"
-            );
-            pte.set_ppn(ppn);
-            pte.set_flags(flags | PteFlags::V);
-            vpn = vpn + 1;
-            ppn = ppn + 1;
-        }
-        Ok(())
-    }
+    /// The given size is invalid.
+    BadSize(usize),
 
-    fn unmap(&mut self, kmem: &Kmem) {
-        for lvl2_pte in &mut self.0 {
-            let lvl2_pte_flags = lvl2_pte.flags();
-            if !lvl2_pte_flags.contains(PteFlags::V) || lvl2_pte_flags.is_leaf() {
-                continue;
-            }
-            let lvl1_ppn = lvl2_pte.ppn();
-            let lvl1_page_table = unsafe { lvl2_pte.unchecked_next_table_mut() };
-            for lvl1_pte in &mut lvl1_page_table.0 {
-                let lvl1_pte_flags = lvl1_pte.flags();
-                if !lvl1_pte_flags.contains(PteFlags::V) || lvl1_pte_flags.is_leaf() {
-                    continue;
-                }
-                let lvl0_ppn = lvl1_pte.ppn();
-                *lvl1_pte = PageTableEntry::default();
-                kmem.dealloc(lvl0_ppn);
-            }
-            *lvl2_pte = PageTableEntry::default();
-            kmem.dealloc(lvl1_ppn);
-        }
-    }
-
-    fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let vpn = vaddr.page_number();
-        let indices = vpn.indices();
-        let mut pte = &self.0[indices[2]];
-        for lvl in (0..3).rev() {
-            let flags = pte.flags();
-            if !flags.contains(PteFlags::V) {
-                break;
-            }
-            if flags.is_leaf() {
-                let ppn = pte.translate(vpn, lvl);
-                let paddr = ppn.addr().wrapping_add(vaddr.page_offset());
-                return Some(paddr);
-            }
-            if lvl == 0 {
-                break;
-            }
-            let page_table = unsafe { pte.unchecked_next_table() };
-            pte = &page_table.0[indices[lvl - 1]];
-        }
-        None
-    }
-
-    fn init(ppn: PhysPageNumber) {
-        let ptr = Self::ptr_mut_from_ppn(ppn).cast::<PageTableEntry>();
-        for i in 0..PAGE_SIZE / size_of::<PageTableEntry>() {
-            unsafe {
-                ptr.add(i).write(PageTableEntry::default());
-            }
-        }
-    }
-
-    fn create<'e>(pte: &'e mut PageTableEntry, kmem: &Kmem) -> Result<&'e mut Self, Error> {
-        if !pte.flags().contains(PteFlags::V) {
-            let ppn = kmem.alloc(0).ok_or(Error::OutOfMemory)?;
-            Self::init(ppn);
-            pte.set_ppn(ppn);
-            pte.set_flags(PteFlags::V);
-        }
-        let page_table = unsafe { pte.unchecked_next_table_mut() };
-        Ok(page_table)
-    }
-
-    #[inline]
-    const fn ptr_from_ppn(ppn: PhysPageNumber) -> *const Self {
-        let vaddr = unsafe { ppn.addr().direct() };
-        vaddr.as_ptr::<Self>()
-    }
-
-    #[inline]
-    const fn ptr_mut_from_ppn(ppn: PhysPageNumber) -> *mut Self {
-        let vaddr = unsafe { ppn.addr().direct() };
-        vaddr.as_ptr_mut::<Self>()
-    }
+    /// The given virutal address has been mapped.
+    Remap(VirtAddr),
 }
 
-bitflags! {
-    /// Flags for a RISC-V Page Table Entry (PTE).
-    ///
-    /// These flags control the permissions (Read, Write, Execute) and state
-    /// (Valid, User, Global, Accessed, Dirty) of a memory page.
-    #[derive(Clone, Copy)]
-    struct PteFlags: usize {
-        /// Valid bit.
-        const V = 1 << 0;
-        /// Read bit.
-        const R = 1 << 1;
-        /// Write bit.
-        const W = 1 << 2;
-        /// Execute bit.
-        const X = 1 << 3;
-        /// User mode bit.
-        const U = 1 << 4;
-        /// Global mapping bit.
-        const G = 1 << 5;
-        /// Accessed bit.
-        const A = 1 << 6;
-        /// Dirty bit.
-        const D = 1 << 7;
-    }
-}
+impl core::error::Error for MappingError {}
 
-impl PteFlags {
-    fn is_leaf(self) -> bool {
-        self.intersects(Self::R | Self::W | Self::X)
-    }
-}
-
-/// A RISC-V Page Table Entry (PTE).
-///
-/// A PTE contains the physical page number (PPN) of either the next level
-/// page table or the actual mapped physical frame. It also contains flags
-/// describing the mapping's permissions and state.
-#[derive(Debug, Default, Clone, Copy)]
-struct PageTableEntry(usize);
-
-impl PageTableEntry {
-    const fn ppn(self) -> PhysPageNumber {
-        PhysPageNumber::new(self.0 >> 10)
-    }
-
-    const fn flags(self) -> PteFlags {
-        PteFlags::from_bits_retain(self.0 & 0xff)
-    }
-
-    const fn translate(self, vpn: VirtPageNumber, lvl: usize) -> PhysPageNumber {
-        let ppn = self.ppn();
-        let mask = (1 << (lvl * 9)) - 1;
-        let lower = vpn.get() & mask;
-        let upper = ppn.get() & !mask;
-        PhysPageNumber::new(upper | lower)
-    }
-
-    const fn set_ppn(&mut self, ppn: PhysPageNumber) {
-        let mask = ((1 << PhysPageNumber::BITS) - 1) << 10;
-        self.0 &= !mask;
-        self.0 |= ppn.get() << 10;
-    }
-
-    const fn set_flags(&mut self, flags: PteFlags) {
-        let mask = 0xff;
-        self.0 &= !mask;
-        self.0 |= flags.bits();
-    }
-
-    #[inline]
-    const unsafe fn unchecked_next_table(&self) -> &PageTable {
-        unsafe { &*PageTable::ptr_from_ppn(self.ppn()) }
-    }
-
-    #[inline]
-    const unsafe fn unchecked_next_table_mut(&mut self) -> &mut PageTable {
-        unsafe { &mut *PageTable::ptr_mut_from_ppn(self.ppn()) }
+impl fmt::Display for MappingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::BadAddress(addr) => {
+                write!(f, "{addr:p} is not a valid virtual address")
+            }
+            Self::BadSize(size) => write!(
+                f,
+                "size must be non-zero and aligned to {PAGE_SIZE}; got {size}"
+            ),
+            Self::Remap(addr) => {
+                write!(f, "{addr:p} has been mapped to a physical address")
+            }
+        }
     }
 }

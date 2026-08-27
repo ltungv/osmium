@@ -21,7 +21,7 @@ impl VirtPageNumber {
 
     /// Create a new virtual page number, asserting that the higher 37 bits are zero.
     pub const fn new(vpn: usize) -> Self {
-        Self::new_checked(vpn).expect("invalid virtual page number")
+        Self::new_checked(vpn).expect("virtual page number should be truncated")
     }
 
     /// Create a new virtual page number, returning [`None`] if the higher 37 bits are not zero.

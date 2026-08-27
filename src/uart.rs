@@ -53,13 +53,6 @@ pub struct Uart16550 {
     stride: NonZeroU8,
 }
 
-// SAFETY:
-// * `Uart16550` is not `Sync`, so concurrent access from multiple thread is not possible without
-//   additional synchronizations
-// * the device address is ensured to points to a physical memory region large enough to accomodate
-//   `num_registers` addresses, and access to the region is given exclusively to the driver instance
-// * all operations take a `&mut self` which ensures the driver is only accessed by at most one
-//   thread at a time
 unsafe impl Send for Uart16550 {}
 
 impl Write for Uart16550 {
@@ -73,6 +66,7 @@ impl Write for Uart16550 {
     }
 }
 
+#[expect(unused)]
 impl Uart16550 {
     /// Receiver holding register.
     const RHR: usize = 0;
@@ -116,18 +110,18 @@ impl Uart16550 {
     /// Number of registers of the device.
     const NUM_REGISTERS: usize = 8;
 
-    unsafe fn new(ptr: NonNull<u8>, stride: u8) -> Result<Self, InvalidAddressError> {
+    unsafe fn new(ptr: NonNull<u8>, stride: u8) -> Result<Self, AddressError> {
         if !stride.is_power_of_two() {
-            return Err(InvalidAddressError::InvalidStride(stride));
+            return Err(AddressError::BadStride(stride));
         }
         let Some(stride) = NonZeroU8::new(stride) else {
-            return Err(InvalidAddressError::InvalidStride(stride));
+            return Err(AddressError::BadStride(stride));
         };
         if (ptr.as_ptr() as usize)
             .checked_add((Self::NUM_REGISTERS - 1) * stride.get() as usize)
             .is_none()
         {
-            return Err(InvalidAddressError::InvalidAddress(ptr));
+            return Err(AddressError::BadPointer(ptr));
         }
         Ok(Self { ptr, stride })
     }
@@ -206,23 +200,23 @@ impl Uart16550 {
 }
 
 #[derive(Debug)]
-enum InvalidAddressError {
-    /// The given address is invalid.
-    InvalidAddress(NonNull<u8>),
+enum AddressError {
+    /// The given pointer is invalid.
+    BadPointer(NonNull<u8>),
 
     /// The given stride is invalid.
-    InvalidStride(u8),
+    BadStride(u8),
 }
 
-impl Error for InvalidAddressError {}
+impl Error for AddressError {}
 
-impl fmt::Display for InvalidAddressError {
+impl fmt::Display for AddressError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::InvalidAddress(ptr) => {
-                write!(f, "{ptr:p} is not a valid UART device address")
+            Self::BadPointer(ptr) => {
+                write!(f, "{ptr:p} is not a valid pointer to an UART device")
             }
-            Self::InvalidStride(stride) => write!(
+            Self::BadStride(stride) => write!(
                 f,
                 "stride must be non-zero and a power of two; got {stride}"
             ),
