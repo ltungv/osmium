@@ -4,7 +4,7 @@
 #![no_main]
 #![no_std]
 #![reexport_test_harness_main = "kernel_test"]
-#![test_runner(test::runner)]
+#![test_runner(test::run)]
 #![warn(
     clippy::all,
     clippy::alloc_instead_of_core,
@@ -13,16 +13,18 @@
     rustdoc::all
 )]
 
+use core::arch::asm;
+
 pub mod kalloc;
 pub mod kheap;
 pub mod mem;
 pub mod paging;
 pub mod proc;
 pub mod riscv;
-pub mod test;
 pub mod uart;
 
-use crate::paging::MappingError;
+#[cfg(test)]
+mod test;
 
 #[cfg(test)]
 boot!(test_main);
@@ -34,9 +36,6 @@ extern "C" fn test_main() {
     if cpuid == 0 {
         kernel_test();
     }
-    loop {
-        core::hint::spin_loop();
-    }
 }
 
 #[cfg(test)]
@@ -46,14 +45,14 @@ const extern "C" fn eh_personality() {}
 #[cfg(test)]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    test::panic_handler(info)
+    test::panic(info)
 }
 
 /// Kernel error.
 #[derive(Debug)]
 pub enum Error {
     /// The kernel and/or its subsystems are in an invalid state.
-    BadMapping(MappingError),
+    BadMapping(paging::MappingError),
 
     /// There's no memory left on the device for the kernel.
     OutOfMemory,
@@ -67,6 +66,15 @@ impl core::fmt::Display for Error {
             Self::BadMapping(err) => write!(f, "{err}"),
             Self::OutOfMemory => write!(f, "out of memory"),
         }
+    }
+}
+
+pub fn abort() -> ! {
+    loop {
+        unsafe {
+            asm!("wfi");
+        }
+        core::hint::spin_loop();
     }
 }
 

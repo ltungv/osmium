@@ -1,6 +1,8 @@
 use core::panic::PanicInfo;
 
-use crate::{print, println};
+use crate::{abort, print, println};
+
+pub const SIFIVE_BASE: usize = 0x10_0000;
 
 pub trait Case {
     fn test(&self) -> ();
@@ -17,21 +19,34 @@ where
     }
 }
 
-pub fn runner(cases: &[&dyn Case]) {
+pub fn run(cases: &[&dyn Case]) {
     println!("Running {} tests", cases.len());
     for case in cases {
         case.test();
     }
+    exit_qemu(SiFiveTestStatus::Success);
 }
 
-pub fn panic_handler(info: &PanicInfo) -> ! {
+pub fn panic(info: &PanicInfo) -> ! {
     println!("[failed]\n");
     println!("Error: {}\n", info);
-    loop {
-        core::hint::spin_loop();
-    }
+    exit_qemu(SiFiveTestStatus::Failure(1))
 }
 
-fn exit_qemu() {
-    todo!()
+#[derive(Clone, Copy)]
+#[repr(u16)]
+pub enum SiFiveTestStatus {
+    Failure(u16),
+    Success,
+}
+
+pub fn exit_qemu(status: SiFiveTestStatus) -> ! {
+    let command = match status {
+        SiFiveTestStatus::Failure(code) => (code as u32) << 16 | 0x3333,
+        SiFiveTestStatus::Success => 0x5555,
+    };
+    unsafe {
+        core::ptr::write_volatile(SIFIVE_BASE as *mut u32, command);
+    }
+    abort()
 }
