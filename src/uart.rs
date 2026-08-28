@@ -122,7 +122,7 @@ impl Uart16550 {
             .checked_add((Self::NUM_REGISTERS - 1) * stride.get() as usize)
             .is_none()
         {
-            return Err(AddressError::BadPointer(ptr));
+            return Err(AddressError::BadAddress(ptr));
         }
         Ok(Self { ptr, stride })
     }
@@ -202,8 +202,8 @@ impl Uart16550 {
 
 #[derive(Debug)]
 enum AddressError {
-    /// The given pointer is invalid.
-    BadPointer(NonNull<u8>),
+    /// The given address is invalid.
+    BadAddress(NonNull<u8>),
 
     /// The given stride is invalid.
     BadStride(u8),
@@ -214,8 +214,8 @@ impl Error for AddressError {}
 impl fmt::Display for AddressError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::BadPointer(ptr) => {
-                write!(f, "{ptr:p} is not a valid pointer to an UART device")
+            Self::BadAddress(ptr) => {
+                write!(f, "{ptr:p} is not a valid UART device address")
             }
             Self::BadStride(stride) => write!(
                 f,
