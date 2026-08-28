@@ -2,10 +2,7 @@
 
 use core::fmt;
 
-use crate::{
-    PAGE_SIZE,
-    mem::{align_up, ppn::PhysPageNumber, vaddr::VirtAddr},
-};
+use crate::mem::{PAGE_SIZE, align_up, ppn::PhysPageNumber, vaddr::VirtAddr};
 
 /// A physical memory address.
 ///
@@ -72,5 +69,20 @@ impl PhysAddr {
 impl fmt::Pointer for PhysAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "phys@{:x}", self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mem::paddr::PhysAddr;
+
+    #[test_case]
+    fn new_checked() {
+        PhysAddr::new_checked(0x1111_1111_1111_1111);
+    }
+
+    #[test_case]
+    fn panicking() {
+        panic!("stop right there!");
     }
 }

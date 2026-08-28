@@ -3,9 +3,9 @@
 use core::marker::PhantomData;
 
 use crate::{
-    Error, PAGE_SIZE,
+    Error,
     kalloc::Kmem,
-    mem::{align_down, paddr::PhysAddr, ppn::PhysPageNumber, vaddr::VirtAddr},
+    mem::{PAGE_SIZE, align_down, paddr::PhysAddr, ppn::PhysPageNumber, vaddr::VirtAddr},
     paging::{
         MappingError,
         page_table::{PageTable, PageTableEntry, PteFlags},

@@ -6,12 +6,15 @@ pub mod sv39;
 use core::{arch::asm, fmt};
 
 use crate::{
-    BSS_ADDR, DATA_ADDR, Error, HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, RODATA_ADDR, STACK_ADDR,
-    TRAMP_ADDR, UART_ADDR,
+    Error,
     kalloc::Kmem,
-    mem::{paddr::PhysAddr, vaddr::VirtAddr},
+    mem::{
+        BSS_ADDR, DATA_ADDR, HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, RODATA_ADDR, STACK_ADDR,
+        TRAMP_ADDR, paddr::PhysAddr, vaddr::VirtAddr,
+    },
     paging::{page_table::PteFlags, sv39::Sv39},
     riscv::w_satp,
+    uart::UART_BASE,
 };
 
 /// Initializes the hardware page table register for the current hart (CPU).
@@ -28,7 +31,7 @@ pub fn kvminit() {
             table.map(VirtAddr::new(addr), PhysAddr::new(addr), size, flags, kmem)
         };
 
-        mapdirect(UART_ADDR, PAGE_SIZE, PteFlags::R | PteFlags::W)
+        mapdirect(UART_BASE, PAGE_SIZE, PteFlags::R | PteFlags::W)
             .expect("uart registers should be mapped");
 
         unsafe {

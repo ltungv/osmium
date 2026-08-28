@@ -7,7 +7,7 @@ edition = "2024"
 name = "osmium"
 bench = false
 doctest = false
-test = false
+test = true
 
 [[bin]]
 name = "osmium"
