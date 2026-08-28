@@ -8,7 +8,10 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use crate::{PAGE_SIZE, kalloc::Kmem, mem};
+use crate::{
+    kalloc::Kmem,
+    mem::{self, PAGE_SIZE},
+};
 
 fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
     let addr = mem::align_up(ptr as usize, align);

@@ -2,10 +2,7 @@
 
 use core::fmt;
 
-use crate::{
-    PAGE_SIZE,
-    mem::{align_up, vpn::VirtPageNumber},
-};
+use crate::mem::{PAGE_SIZE, align_up, vpn::VirtPageNumber};
 
 /// A virtual memory address.
 ///

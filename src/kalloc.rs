@@ -10,10 +10,7 @@
 
 use core::{fmt, slice};
 
-use crate::{
-    HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE,
-    mem::{paddr::PhysAddr, ppn::PhysPageNumber},
-};
+use crate::mem::{HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, paddr::PhysAddr, ppn::PhysPageNumber};
 
 const MAX_ORDER: usize = 12;
 
