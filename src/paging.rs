@@ -17,11 +17,16 @@ use crate::{
     uart::UART_BASE,
 };
 
-/// Initializes the hardware page table register for the current hart (CPU).
+/// Initializes the kernel's page table for this current hardware thread.
 ///
-/// This function configures the `satp` register with the root page table's
-/// physical page number and enables the Sv39 paging scheme. It also flushes
-/// the TLB to ensure stale entries are removed. It must be called by each CPU.
+/// Upon the first call to this function, a fresh kernel's page table is created containing the
+/// direct mapping of all useable physical memory. Multiple concurrent calls to this function are
+/// safe, such that at most one kernel's page table will ever be created.
+///
+/// Upon concurrent calls from multiple hardware threads, only a single hardware thread can be in
+/// charge of setting up the kernel's page table. All other hardware threads wait for the setup to
+/// finish before updating their local `satp` register to the address of the newly created kernel's
+/// page table.
 pub fn kvminit() {
     static KVM: spin::Once<MappedPageTable> = spin::Once::new();
     let kvm = KVM.call_once(|| {
@@ -97,14 +102,14 @@ impl<'t> MappedPageTable<'t> {
     }
 
     fn satp(&self) -> usize {
-        let page_table = self.0.lock();
-        page_table.satp()
+        let vm = self.0.lock();
+        vm.satp()
     }
 
     /// Translate the given virtual address into the physical address that was mapped to it.
     pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        let page_table = self.0.lock();
-        page_table.translate(vaddr)
+        let vm = self.0.lock();
+        vm.translate(vaddr)
     }
 
     /// Map the given virtual address to the given physical address.
@@ -116,14 +121,14 @@ impl<'t> MappedPageTable<'t> {
         flags: PteFlags,
         kmem: &Kmem,
     ) -> Result<(), Error> {
-        let mut page_table = self.0.lock();
-        page_table.map(vaddr, paddr, size, flags, kmem)
+        let mut vm = self.0.lock();
+        vm.map(vaddr, paddr, size, flags, kmem)
     }
 
     /// Unmap all previously mapped virtual addresses.
     pub fn unmap(&mut self, kmem: &Kmem) {
-        let mut page_table = self.0.lock();
-        page_table.unmap(kmem);
+        let mut vm = self.0.lock();
+        vm.unmap(kmem);
     }
 }
 
@@ -153,7 +158,7 @@ impl fmt::Display for MappingError {
                 "size must be non-zero and aligned to {PAGE_SIZE}; got {size}"
             ),
             Self::Remap(addr) => {
-                write!(f, "{addr:p} has been mapped to a physical address")
+                write!(f, "{addr:p} is remapped to a different physical address")
             }
         }
     }

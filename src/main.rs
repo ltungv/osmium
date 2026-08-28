@@ -12,7 +12,7 @@
 
 use core::sync::atomic::{self, AtomicBool};
 
-use osmium::{boot, kheap, paging, println, proc};
+use osmium::{abort, boot, kheap, paging, println, proc};
 
 boot!(main);
 
@@ -58,7 +58,5 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     } else {
         println!("panic: no information available");
     }
-    loop {
-        core::hint::spin_loop();
-    }
+    abort()
 }
