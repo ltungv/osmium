@@ -13,7 +13,6 @@ use crate::{
         TRAMP_ADDR, paddr::PhysAddr, vaddr::VirtAddr,
     },
     paging::{page_table::PteFlags, sv39::Sv39},
-    riscv::w_satp,
     uart::UART_BASE,
 };
 
@@ -83,7 +82,7 @@ pub fn kvminit() {
         // wait for any previous writes to the page table memory to finish
         asm!("sfence.vma");
         // write to the satp register
-        w_satp(kvm.satp());
+        asm!("csrw satp, {}", in(reg) kvm.satp());
         // flush stale entries from the translation lookaside buffer
         asm!("sfence.vma");
     }
