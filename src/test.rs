@@ -20,7 +20,7 @@ where
 }
 
 pub fn run(cases: &[&dyn Case]) {
-    println!("Running {} tests", cases.len());
+    println!("running {} tests", cases.len());
     for case in cases {
         case.test();
     }
@@ -29,7 +29,7 @@ pub fn run(cases: &[&dyn Case]) {
 
 pub fn panic(info: &PanicInfo) -> ! {
     println!("[failed]\n");
-    println!("Error: {}\n", info);
+    println!("error: {}\n", info);
     exit_qemu(SiFiveTestStatus::Failure(1))
 }
 
