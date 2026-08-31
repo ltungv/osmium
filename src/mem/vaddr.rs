@@ -51,7 +51,7 @@ impl VirtAddr {
 
     /// Adds an offset to this virtual address, wrapping around on overflow.
     pub const fn wrapping_add(self, len: usize) -> Self {
-        Self(self.0.wrapping_add(len))
+        Self::new(self.0.wrapping_add(len))
     }
 
     /// Align the address upwards to a multiple of `align`.

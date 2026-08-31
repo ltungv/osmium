@@ -10,41 +10,25 @@
 
 use core::{fmt, slice};
 
-use crate::mem::{HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, paddr::PhysAddr, ppn::PhysPageNumber};
+use crate::{
+    mem::{HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, paddr::PhysAddr, ppn::PhysPageNumber},
+    spinlock::Spinlock,
+};
 
 const MAX_ORDER: usize = 12;
 
-/// A global physical memory allocator that allocates memory from the region between [`HEAP_ADDR`]
-/// and the end of the physical memory.
-pub struct Kmem {
-    alloc: spin::Mutex<BuddyAlloc>,
+static KMEM: Spinlock<Kmem> = Spinlock::new(Kmem::empty());
+
+/// Returns a reference to the global physical memory allocator.
+pub fn kmem() -> &'static Spinlock<Kmem> {
+    &KMEM
 }
 
-impl Kmem {
-    /// Returns a reference to the global physical memory allocator.
-    pub fn get() -> &'static Self {
-        static INIT: spin::Once<Kmem> = spin::Once::new();
-        INIT.call_once(|| {
-            let kmem = Kmem {
-                alloc: spin::Mutex::new(BuddyAlloc::empty()),
-            };
-            unsafe {
-                kmem.alloc
-                    .lock()
-                    .init(PhysAddr::new(HEAP_ADDR), (MEM_ADDR + MEM_SIZE) - HEAP_ADDR);
-            }
-            kmem
-        })
-    }
-
-    /// Gets exclusive access to the allocator and allocates a contiguous block of physical memory
-    pub fn alloc(&self, num_frames: usize) -> Option<PhysPageNumber> {
-        self.alloc.lock().alloc(num_frames)
-    }
-
-    /// Gets exclusive access to the allocator and deallocates a previously allocated block of physical memory.
-    pub fn dealloc(&self, ppn: PhysPageNumber) {
-        self.alloc.lock().dealloc(ppn);
+/// Initializes the global physical memory allocator.
+pub fn init() {
+    let mut kmem = kmem().lock();
+    unsafe {
+        kmem.init(PhysAddr::new(HEAP_ADDR), (MEM_ADDR + MEM_SIZE) - HEAP_ADDR);
     }
 }
 
@@ -52,7 +36,7 @@ impl Kmem {
 ///
 /// [`BuddyAlloc`] manages physical memory by dividing it into blocks of sizes that are powers of two.
 /// Each block's state is maintained in an array of [`Header`].
-struct BuddyAlloc {
+pub struct Kmem {
     /// The starting physical page number of the memory region managed by this allocator.
     addr: PhysPageNumber,
     /// An array of metadata headers for each frame in the managed region.
@@ -62,7 +46,7 @@ struct BuddyAlloc {
     free_list: [Option<usize>; MAX_ORDER + 1],
 }
 
-impl fmt::Debug for BuddyAlloc {
+impl fmt::Debug for Kmem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -98,7 +82,7 @@ impl fmt::Debug for BuddyAlloc {
     }
 }
 
-impl BuddyAlloc {
+impl Kmem {
     /// Creates a new, empty buddy allocator with no memory.
     const fn empty() -> Self {
         Self {
@@ -145,7 +129,7 @@ impl BuddyAlloc {
     ///
     /// Returns the starting physical page number of the allocated block, or [`None`] if the allocation fails
     /// (e.g., if there is not enough contiguous free memory).
-    fn alloc(&mut self, num_frames: usize) -> Option<PhysPageNumber> {
+    pub fn alloc(&mut self, num_frames: usize) -> Option<PhysPageNumber> {
         let order = num_frames.next_power_of_two().highest_one()? as usize;
         for o in order..=MAX_ORDER {
             let Some(idx) = self.pop_free(o) else {
@@ -164,7 +148,7 @@ impl BuddyAlloc {
     ///
     /// The `ppn` must be the starting physical page number of a block previously returned by [`Self::alloc`].
     /// The allocator determines the size of the block from its metadata header.
-    fn dealloc(&mut self, ppn: PhysPageNumber) {
+    pub fn dealloc(&mut self, ppn: PhysPageNumber) {
         let mut idx = ppn - self.addr;
         let mut order = self.headers[idx].order as usize;
         while order < MAX_ORDER {

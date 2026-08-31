@@ -1,6 +1,30 @@
-//! Process management and CPU identification.
+//! Process management.
 
 use core::arch::asm;
+
+/// Total number of CPUs in the system.
+pub const NCPU: usize = 4;
+
+/// Per CPU metadata.
+pub struct Cpu {
+    push_offs: usize,
+    intr_enabled: bool,
+}
+
+impl Cpu {
+    const fn zero() -> Self {
+        Cpu {
+            push_offs: 0,
+            intr_enabled: false,
+        }
+    }
+
+    /// Get a mutable reference to metadata of this CPU.
+    pub fn current() -> &'static mut Self {
+        static mut CPUS: [Cpu; 4] = [const { Cpu::zero() }; 4];
+        unsafe { &mut CPUS[cpuid()] }
+    }
+}
 
 /// Get the hardware thread id of the currently executing thread.
 ///
@@ -14,4 +38,59 @@ pub unsafe fn cpuid() -> usize {
         asm!("mv {}, tp", out(reg) tp);
     }
     tp
+}
+
+/// The lifecycle of this struct determines a section of the program's execution where interrupts
+/// are disable.
+///
+/// Under scenarios where a spinlock is used by both a thread and an interupts handler, the thread
+/// and the interrupt handler can deadlock when an interrupt happens after the thread acquired the
+/// spinlock. To avoid this, the kernel disables interrupt on a CPU when it acquires any lock.
+///
+/// When the first [`PushOff`] is created, all interrupts are disable until the last [`PushOff`]
+/// falls out of scope.
+pub struct PushOff;
+
+impl Default for PushOff {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for PushOff {
+    fn drop(&mut self) {
+        let sstatus_sie = 1 << 1;
+        let sstatus: usize;
+        unsafe {
+            asm!("csrr {}, sstatus", out(reg) sstatus);
+        }
+        if sstatus & sstatus_sie == sstatus_sie {
+            panic!("pop_intr_disable - interruptible");
+        }
+        let cpu = Cpu::current();
+        cpu.push_offs -= 1;
+        if cpu.push_offs == 0 && cpu.intr_enabled {
+            unsafe {
+                asm!("csrs sstatus, {}", in(reg) sstatus_sie);
+            }
+        }
+    }
+}
+
+impl PushOff {
+    /// Creates a new [`PushOff`], ensuring that the curent CPU has all interrupts disabled for the
+    /// lifetime of the [`PushOff`] instance.
+    pub fn new() -> Self {
+        let cpu = Cpu::current();
+        if cpu.push_offs == 0 {
+            let sstatus_sie = 1 << 1;
+            let sstatus: usize;
+            unsafe {
+                asm!("csrrc {}, sstatus, {}", out(reg) sstatus, in(reg) sstatus_sie);
+            }
+            cpu.intr_enabled = sstatus & sstatus_sie == sstatus_sie;
+        }
+        cpu.push_offs += 1;
+        Self
+    }
 }

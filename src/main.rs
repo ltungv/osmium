@@ -10,53 +10,41 @@
     rustdoc::all
 )]
 
-use core::sync::atomic::{self, AtomicBool};
+use osmium::{
+    main,
+    mem::{TRAMP_ADDR, TRAMPOLINE, vaddr::VirtAddr},
+    paging, println,
+};
 
-use osmium::{abort, boot, kheap, paging, println, proc};
-
-boot!(main);
+main!(main);
 
 /// The main Rust entry point of the kernel.
 ///
 /// This function is called by the `boot` assembly code. It routes execution to the
 /// test runner if tests are enabled, or to `kernel_main` for normal operation.
 extern "C" fn main() {
-    static INIT: AtomicBool = AtomicBool::new(false);
-    let cpuid = unsafe { proc::cpuid() };
-    if cpuid == 0 {
-        println!();
-        println!("osmium kernel is booting");
-        println!();
-        // kernel page table
-        paging::kvminit();
-        // object allocator
-        kheap::init();
-        // finish initialization
-        INIT.store(true, atomic::Ordering::Release);
-    } else {
-        // wait for cpu 0 to finish initialization
-        while !INIT.load(atomic::Ordering::Acquire) {
-            core::hint::spin_loop();
-        }
-        // enable paging
-        paging::kvminit();
-    }
-    println!("cpu#{} started", cpuid);
+    osmium::kinit();
+    let kvm = paging::kvm();
+
+    let vaddr1 = VirtAddr::new(TRAMPOLINE);
+    let paddr1 = kvm
+        .lock()
+        .translate(vaddr1)
+        .expect("translate should not fail")
+        .expect("address hould be mapped");
+
+    let vaddr2 = VirtAddr::new(unsafe { TRAMP_ADDR });
+    let paddr2 = kvm
+        .lock()
+        .translate(vaddr1)
+        .expect("translate should not fail")
+        .expect("address hould be mapped");
+
+    assert_eq!(paddr1, paddr2);
+    println!("{vaddr1:p} --> {paddr1:p}");
+    println!("{vaddr2:p} --> {paddr2:p}");
+
     loop {
         core::hint::spin_loop();
     }
-}
-
-#[unsafe(no_mangle)]
-const extern "C" fn eh_personality() {}
-
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    println!("aborting!");
-    if let Some(p) = info.location() {
-        println!("panic: {} ({}:{})", info.message(), p.file(), p.line());
-    } else {
-        println!("panic: no information available");
-    }
-    abort()
 }

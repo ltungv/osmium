@@ -9,8 +9,9 @@ use core::{
 };
 
 use crate::{
-    kalloc::Kmem,
+    kalloc::{self},
     mem::{self, PAGE_SIZE},
+    spinlock::Spinlock,
 };
 
 fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
@@ -18,12 +19,33 @@ fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
     addr as *mut u8
 }
 
+#[global_allocator]
+static KHEAP: KernelHeap = KernelHeap(Spinlock::new(LinkedHeap::empty()));
+
+/// Initializes the kernel heap.
+///
+/// This function requests a large block of physical memory (currently 64 pages)
+/// from the global physical memory allocator ([`Kmem`]) and initializes the
+/// global `KernelHeap` with it. It must be called once during boot before
+/// any dynamic memory allocation is performed.
+pub fn init() {
+    let ppn = kalloc::kmem()
+        .lock()
+        .alloc(64)
+        .expect("physical memory should be available");
+
+    let mut kheap = KHEAP.0.lock();
+    unsafe {
+        kheap.init(ppn.addr().direct().as_ptr_mut::<u8>(), PAGE_SIZE * 64);
+    }
+}
+
 /// A global allocator for the kernel heap.
 ///
-/// This struct wraps a [`LinkedHeap`] in a `spin::Mutex` to provide thread-safe
+/// This struct wraps a [`LinkedHeap`] in a [`Spinlock`] to provide thread-safe
 /// dynamic memory allocation. It implements the [`GlobalAlloc`] trait, which
 /// allows the kernel to use Rust's standard `alloc` crate.
-struct KernelHeap(spin::Mutex<LinkedHeap>);
+struct KernelHeap(Spinlock<LinkedHeap>);
 
 unsafe impl GlobalAlloc for KernelHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -34,25 +56,6 @@ unsafe impl GlobalAlloc for KernelHeap {
         unsafe {
             self.0.lock().dealloc(ptr, layout);
         }
-    }
-}
-
-static KHEAP: KernelHeap = KernelHeap(spin::Mutex::new(LinkedHeap::empty()));
-
-/// Initializes the kernel heap.
-///
-/// This function requests a large block of physical memory (currently 64 pages)
-/// from the global physical memory allocator ([`Kmem`]) and initializes the
-/// global `KernelHeap` with it. It must be called once during boot before
-/// any dynamic memory allocation is performed.
-pub fn init() {
-    let ppn = Kmem::get()
-        .alloc(64)
-        .expect("physical memory should be available");
-
-    let mut kheap = KHEAP.0.lock();
-    unsafe {
-        kheap.init(ppn.addr().direct().as_ptr_mut::<u8>(), PAGE_SIZE * 64);
     }
 }
 

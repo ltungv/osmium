@@ -15,7 +15,7 @@ _entry:
   mul a0, a0, a1
   add sp, sp, a0
   // jump into rust
-  call boot
+  call minit
 
 spin:
   j spin

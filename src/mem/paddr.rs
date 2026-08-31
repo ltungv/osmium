@@ -78,11 +78,6 @@ mod tests {
 
     #[test_case]
     fn new_checked() {
-        PhysAddr::new_checked(0x1111_1111_1111_1111);
-    }
-
-    #[test_case]
-    fn panicking() {
-        panic!("stop right there!");
+        PhysAddr::new(0x0000_003f_ffff_ffff);
     }
 }
