@@ -56,7 +56,7 @@ impl ops::Add<usize> for VirtPageNumber {
     type Output = Self;
 
     fn add(self, rhs: usize) -> Self::Output {
-        Self(self.0 + rhs)
+        Self::new(self.0 + rhs)
     }
 }
 

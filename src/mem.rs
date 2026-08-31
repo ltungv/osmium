@@ -1,5 +1,7 @@
 //! Utilities for dealing with the memory system.
 
+use crate::mem::vaddr::VirtAddr;
+
 pub mod paddr;
 pub mod ppn;
 pub mod vaddr;
@@ -7,6 +9,9 @@ pub mod vpn;
 
 /// The size of a page in bytes.
 pub const PAGE_SIZE: usize = 4096;
+
+/// Address of the trampoline in virtual memory spaces.
+pub const TRAMPOLINE: usize = (1 << (VirtAddr::BITS - 1)) - PAGE_SIZE;
 
 unsafe extern "C" {
     /// Address of the physical memory.

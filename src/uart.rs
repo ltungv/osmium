@@ -7,11 +7,10 @@ use core::{
     ptr::NonNull,
 };
 
+use crate::spinlock::Spinlock;
+
 /// Address of the UART device on the `virt` machine in `QEMU`
 pub const UART_BASE: usize = 0x1000_0000;
-
-/// Global uart device driver.
-static UART_16550: spin::Once<spin::Mutex<Uart16550>> = spin::Once::new();
 
 /// Print a formatted string using the global uart driver.
 #[macro_export]
@@ -30,26 +29,19 @@ macro_rules! println {
 
 /// Print using the global uart driver.
 pub fn print(args: core::fmt::Arguments<'_>) {
-    driver()
-        .lock()
-        .write_fmt(args)
-        .expect("uart driver should print");
-}
-
-/// Get a reference to the global uart driver.
-pub fn driver() -> &'static spin::Mutex<Uart16550> {
-    UART_16550.call_once(|| {
-        let mut uart = unsafe {
-            let ptr = NonNull::new_unchecked(UART_BASE as *mut u8);
-            Uart16550::new(ptr, 1).expect("uart driver should be created")
-        };
-        uart.init();
-        spin::Mutex::new(uart)
-    })
+    static UART_16550: Spinlock<Option<Uart16550>> = Spinlock::new(None);
+    let mut driver = UART_16550.lock();
+    let driver = driver.get_or_insert_with(|| {
+        let driver = unsafe { Uart16550::new(NonNull::new_unchecked(UART_BASE as *mut u8), 1) };
+        let mut driver = driver.expect("uart driver should be created");
+        driver.init();
+        driver
+    });
+    driver.write_fmt(args).expect("uart driver should print");
 }
 
 /// A driver for 16550 UART devices backed by memory-mapped I/O addresses.
-pub struct Uart16550 {
+struct Uart16550 {
     ptr: NonNull<u8>,
     stride: NonZeroU8,
 }

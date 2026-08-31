@@ -20,7 +20,7 @@ pub struct Sv39<'t> {
 
 impl<'t> Sv39<'t> {
     /// Allocates a root page table and creates a new empty address space.
-    pub fn new(kmem: &Kmem) -> Result<Self, Error> {
+    pub fn new(kmem: &mut Kmem) -> Result<Self, Error> {
         let root = kmem.alloc(1).ok_or(Error::OutOfMemory)?;
         let root_page_table = unsafe { root.page_table_mut() };
         root_page_table.zero();
@@ -37,7 +37,7 @@ impl<'t> Sv39<'t> {
         paddr: PhysAddr,
         size: usize,
         flags: PteFlags,
-        kmem: &Kmem,
+        kmem: &mut Kmem,
     ) -> Result<(), Error> {
         if size != align_down(size, PAGE_SIZE) {
             return Err(Error::BadMapping(MappingError::BadSize(size)));
@@ -47,8 +47,8 @@ impl<'t> Sv39<'t> {
         if vaddr != vpn.addr() {
             return Err(Error::BadMapping(MappingError::BadAddress(vaddr)));
         }
-        let end = vaddr.wrapping_add(size).align_up(PAGE_SIZE).page_number();
-        while vpn < end {
+        let end = vaddr.wrapping_add(size - 1).page_number();
+        while vpn <= end {
             let indices = vpn.indices();
             let root = unsafe { self.root.page_table_mut() };
             let mut pte = &mut root[indices[2]];
@@ -76,8 +76,18 @@ impl<'t> Sv39<'t> {
         Ok(())
     }
 
+    // pub fn mapdirect(
+    //     &mut self,
+    //     addr: usize,
+    //     size: usize,
+    //     flags: PteFlags,
+    //     kmem: &mut Kmem,
+    // ) -> Result<(), Error> {
+    //     self.map(VirtAddr::new(addr), PhysAddr::new(addr), size, flags, kmem)
+    // }
+
     /// Unmap all virtual addresses and deallocate all page tables except the root.
-    pub fn unmap(&mut self, kmem: &Kmem) {
+    pub fn unmap(&mut self, kmem: &mut Kmem) {
         let root = unsafe { self.root.page_table_mut() };
         for lvl2_pte in root.iter_mut() {
             let lvl2_pte_flags = lvl2_pte.flags();
