@@ -32,7 +32,7 @@ pub fn init() {
     let ppn = kalloc::kmem()
         .lock()
         .alloc(64)
-        .expect("physical memory should be available");
+        .expect("64 physical frames should be available");
 
     let mut kheap = KHEAP.0.lock();
     unsafe {

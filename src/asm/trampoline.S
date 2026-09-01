@@ -8,6 +8,7 @@
 # `kernel.ld` causes this code to start at a page boundary
 
 .section tramp
+.global usertrap
 .global trampoline
 trampoline:
 

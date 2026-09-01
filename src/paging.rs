@@ -17,7 +17,7 @@ use crate::{
     uart::UART_BASE,
 };
 
-static KVM: Spinlock<PageTableMap> = Spinlock::new(PageTableMap::new());
+static KVM: Spinlock<PageTableMap> = Spinlock::new(PageTableMap(None));
 
 /// Gets a reference to the kernel's page table.
 pub fn kvm() -> &'static Spinlock<PageTableMap<'static>> {
@@ -29,8 +29,15 @@ pub fn kvminit() {
     let mut kmem = kalloc::kmem().lock();
     let mut kvm = KVM.lock();
 
-    kvm.init(&mut kmem)
-        .expect("kernel's page table should be initialized");
+    #[cfg(test)]
+    kvm.map(
+        VirtAddr::new(crate::test::SIFIVE_BASE),
+        PhysAddr::new(crate::test::SIFIVE_BASE),
+        PAGE_SIZE,
+        PteFlags::R | PteFlags::W,
+        &mut kmem,
+    )
+    .expect("sifive test registers should be mapped");
 
     kvm.map(
         VirtAddr::new(UART_BASE),
@@ -136,30 +143,23 @@ pub fn kvminithart() {
 pub struct PageTableMap<'t>(Option<Sv39<'t>>);
 
 impl<'t> PageTableMap<'t> {
-    const fn new() -> Self {
-        Self(None)
-    }
-
-    fn init(&mut self, kmem: &mut Kmem) -> Result<(), Error> {
-        let sv39 = Sv39::new(kmem)?;
-        assert!(
-            self.0.replace(sv39).is_none(),
-            "page table should not be initialized"
-        );
-        Ok(())
-    }
-
     fn satp(&self) -> usize {
         self.0.as_ref().map_or_default(Sv39::satp)
     }
 
+    fn root(&mut self, kmem: &mut Kmem) -> Result<&mut Sv39<'t>, Error> {
+        let vm = if let Some(vm) = self.0.as_mut() {
+            vm
+        } else {
+            let sv39 = Sv39::new(kmem)?;
+            self.0.insert(sv39)
+        };
+        Ok(vm)
+    }
+
     /// Translate the given virtual address into the physical address that was mapped to it.
-    pub fn translate(&self, vaddr: VirtAddr) -> Result<Option<PhysAddr>, Error> {
-        Ok(self
-            .0
-            .as_ref()
-            .ok_or(Error::Uninitialized)?
-            .translate(vaddr))
+    pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
+        self.0.as_ref().and_then(|vm| vm.translate(vaddr))
     }
 
     /// Map the given virtual address to the given physical address.
@@ -171,15 +171,14 @@ impl<'t> PageTableMap<'t> {
         flags: PteFlags,
         kmem: &mut Kmem,
     ) -> Result<(), Error> {
-        self.0
-            .as_mut()
-            .ok_or(Error::Uninitialized)?
-            .map(vaddr, paddr, size, flags, kmem)
+        let root = self.root(kmem)?;
+        root.map(vaddr, paddr, size, flags, kmem)
     }
 
     /// Unmap all previously mapped virtual addresses.
     pub fn unmap(&mut self, kmem: &mut Kmem) -> Result<(), Error> {
-        self.0.as_mut().ok_or(Error::Uninitialized)?.unmap(kmem);
+        let root = self.root(kmem)?;
+        root.unmap(kmem);
         Ok(())
     }
 }

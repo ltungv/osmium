@@ -17,7 +17,11 @@ use crate::{
 
 const MAX_ORDER: usize = 12;
 
-static KMEM: Spinlock<Kmem> = Spinlock::new(Kmem::empty());
+static KMEM: Spinlock<Kmem> = Spinlock::new(Kmem {
+    addr: PhysPageNumber::new(0),
+    headers: &mut [],
+    free_list: [const { None }; MAX_ORDER + 1],
+});
 
 /// Returns a reference to the global physical memory allocator.
 pub fn kmem() -> &'static Spinlock<Kmem> {
@@ -26,7 +30,7 @@ pub fn kmem() -> &'static Spinlock<Kmem> {
 
 /// Initializes the global physical memory allocator.
 pub fn init() {
-    let mut kmem = kmem().lock();
+    let mut kmem = KMEM.lock();
     unsafe {
         kmem.init(PhysAddr::new(HEAP_ADDR), (MEM_ADDR + MEM_SIZE) - HEAP_ADDR);
     }
@@ -83,15 +87,6 @@ impl fmt::Debug for Kmem {
 }
 
 impl Kmem {
-    /// Creates a new, empty buddy allocator with no memory.
-    const fn empty() -> Self {
-        Self {
-            addr: PhysPageNumber::new(0),
-            headers: &mut [],
-            free_list: [const { None }; MAX_ORDER + 1],
-        }
-    }
-
     /// Initializes the buddy allocator with a region of physical memory.
     ///
     /// # Safety
