@@ -8,12 +8,13 @@
 # `kernel.ld` causes this code to start at a page boundary
 
 .section tramp
-.global usertrap
+
 .global trampoline
 trampoline:
 
-.align 4
+.global usertrap
 .global uservec
+.align 4
 uservec:
   j uservec
 

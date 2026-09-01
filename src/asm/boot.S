@@ -4,6 +4,7 @@
 .option norvc
 
 .section .text.init
+
 .global minit
 .global _entry
 _entry:
