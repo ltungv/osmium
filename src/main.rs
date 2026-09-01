@@ -30,15 +30,13 @@ extern "C" fn main() {
     let paddr1 = kvm
         .lock()
         .translate(vaddr1)
-        .expect("translate should not fail")
-        .expect("address hould be mapped");
+        .expect("address should be mapped");
 
     let vaddr2 = VirtAddr::new(unsafe { TRAMP_ADDR });
     let paddr2 = kvm
         .lock()
         .translate(vaddr1)
-        .expect("translate should not fail")
-        .expect("address hould be mapped");
+        .expect("address should be mapped");
 
     assert_eq!(paddr1, paddr2);
     println!("{vaddr1:p} --> {paddr1:p}");

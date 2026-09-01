@@ -21,6 +21,7 @@ pub mod proc;
 pub mod spinlock;
 #[cfg(test)]
 mod test;
+pub mod trap;
 pub mod uart;
 
 use core::{
@@ -75,9 +76,6 @@ pub enum Error {
 
     /// There's no memory left on the device for the kernel.
     OutOfMemory,
-
-    /// A kernel's subsystem is Uninitialized.
-    Uninitialized,
 }
 
 impl core::error::Error for Error {}
@@ -88,7 +86,6 @@ impl core::fmt::Display for Error {
             Self::BadMapping(err) => write!(f, "{err}"),
             Self::BadState => write!(f, "bad state"),
             Self::OutOfMemory => write!(f, "out of memory"),
-            Self::Uninitialized => write!(f, "uninitialized"),
         }
     }
 }

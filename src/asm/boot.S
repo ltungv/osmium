@@ -2,7 +2,9 @@
 # virt.ld causes the following code to be placed at 0x80000000
 
 .option norvc
+
 .section .text.init
+.global minit
 .global _entry
 _entry:
   // the 512kb stack region is divided among 4 hardware threads (128kb each)

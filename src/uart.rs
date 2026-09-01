@@ -27,36 +27,48 @@ macro_rules! println {
     ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
 }
 
+static CONSOLE: Spinlock<Console> = Spinlock::new(Console(None));
+
 /// Print using the global uart driver.
 pub fn print(args: core::fmt::Arguments<'_>) {
-    static UART_16550: Spinlock<Option<Uart16550>> = Spinlock::new(None);
-    let mut driver = UART_16550.lock();
-    let driver = driver.get_or_insert_with(|| {
-        let driver = unsafe { Uart16550::new(NonNull::new_unchecked(UART_BASE as *mut u8), 1) };
-        let mut driver = driver.expect("uart driver should be created");
-        driver.init();
-        driver
-    });
-    driver.write_fmt(args).expect("uart driver should print");
+    let mut console = CONSOLE.lock();
+    console.write_fmt(args).expect("uart driver should print");
+}
+
+struct Console(Option<Uart16550>);
+
+unsafe impl Send for Uart16550 {}
+
+impl Write for Console {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let driver = self.driver().map_err(|_| core::fmt::Error)?;
+        for b in s.bytes() {
+            while !driver.try_put(b) {
+                core::hint::spin_loop();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Console {
+    fn driver(&mut self) -> Result<&mut Uart16550, AddressError> {
+        let driver = if let Some(driver) = self.0.as_mut() {
+            driver
+        } else {
+            let ptr = unsafe { NonNull::new_unchecked(UART_BASE as *mut u8) };
+            let mut driver = unsafe { Uart16550::new(ptr, 1)? };
+            driver.init();
+            self.0.insert(driver)
+        };
+        Ok(driver)
+    }
 }
 
 /// A driver for 16550 UART devices backed by memory-mapped I/O addresses.
 struct Uart16550 {
     ptr: NonNull<u8>,
     stride: NonZeroU8,
-}
-
-unsafe impl Send for Uart16550 {}
-
-impl Write for Uart16550 {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for b in s.bytes() {
-            while !self.try_put(b) {
-                core::hint::spin_loop();
-            }
-        }
-        Ok(())
-    }
 }
 
 #[expect(unused)]
