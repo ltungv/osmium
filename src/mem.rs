@@ -1,11 +1,11 @@
 //! Utilities for dealing with the memory system.
 
-use crate::mem::vaddr::VirtAddr;
-
 pub mod paddr;
 pub mod ppn;
 pub mod vaddr;
 pub mod vpn;
+
+use crate::mem::vaddr::VirtAddr;
 
 /// The size of a page in bytes.
 pub const PAGE_SIZE: usize = 4096;
