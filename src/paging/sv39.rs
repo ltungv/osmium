@@ -10,6 +10,7 @@ use crate::{
         MappingError,
         page_table::{PageTable, PageTableEntry, PteFlags},
     },
+    riscv::Satp,
 };
 
 /// A 39-bit virtual address space.
@@ -141,7 +142,7 @@ impl<'t> Sv39<'t> {
     }
 
     /// Get the SATP register value for this address space.
-    pub const fn satp(&self) -> usize {
-        8 << 60 | self.root.get()
+    pub const fn satp(&self) -> Satp {
+        Satp::sv39(self.root)
     }
 }

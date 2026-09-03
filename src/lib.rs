@@ -18,18 +18,22 @@ pub mod kheap;
 pub mod mem;
 pub mod paging;
 pub mod proc;
+mod riscv;
 pub mod spinlock;
 #[cfg(test)]
 mod test;
 pub mod trap;
 pub mod uart;
 
-use core::{
-    arch::asm,
-    sync::atomic::{self, AtomicBool},
-};
+use core::sync::atomic::{self, AtomicBool};
 
 use mem::{BSS_ADDR, STACK_ADDR};
+
+use crate::riscv::{
+    ExceptionFlags, InterruptFlags, Menvcfg, Permissions, PmpCfg, Privilege, Satp, mret, r_mhartid,
+    r_mstatus, r_sie, w_medeleg, w_menvcfg, w_mepc, w_mideleg, w_mstatus, w_pmp0, w_satp, w_sie,
+    w_tp, wfi,
+};
 
 #[cfg(test)]
 main!(test_main);
@@ -94,7 +98,7 @@ impl core::fmt::Display for Error {
 pub fn abort() -> ! {
     loop {
         unsafe {
-            asm!("wfi");
+            wfi();
         }
         core::hint::spin_loop();
     }
@@ -124,44 +128,30 @@ macro_rules! main {
 pub fn minit(mepc: usize) {
     unsafe {
         // set `mstatus.mpp` to 1, so the cpu switch into supervisor mode after `mret` is called
-        let mut mstatus: usize;
-        asm!("csrr {}, mstatus", out(reg) mstatus);
-        mstatus &= !(0b11 << 11);
-        mstatus |= 0b01 << 11;
-        asm!("csrw mstatus, {}", in(reg) mstatus);
+        w_mstatus(r_mstatus().mpp(Privilege::Supervisor));
 
         // set `mepc` to the address of $path, so the cpu jumps to $path after `mret` is called
-        asm!("csrw mepc, {}", in(reg) mepc);
+        w_mepc(mepc);
 
         // set `satp` to 0 to disable paging
-        asm!("csrw satp, {}", in(reg) 0);
+        w_satp(Satp::bare());
 
         // delegate all exceptions and interrupts to supervisor mode
-        asm!("csrw medeleg, {}", in(reg) 0xffff);
-        asm!("csrw mideleg, {}", in(reg) 0xffff);
+        w_medeleg(ExceptionFlags::all());
+        w_mideleg(InterruptFlags::all());
 
         // set `sie` to enable specific interrupts:
-        // 1 << 9: supervisor external interrupt enable bit
-        // 1 << 5: supervisor timer interrupt enable bit
-        let sie: usize;
-        asm!("csrr {}, sie", out(reg) sie);
-        asm!("csrw sie, {}", in(reg) sie | (1 << 9) | (1 << 5));
+        w_sie(r_sie() | InterruptFlags::SUPERVISOR_TIMER | InterruptFlags::SUPERVISOR_EXTERNAL);
 
         // give supervisor mode access to all physical memory
-        asm!("csrw pmpaddr0, {}", in(reg) 0x3f_ffff_ffff_ffffu64);
-        asm!("csrw pmpcfg0, {}", in(reg) 0xf);
+        w_pmp0(0x3f_ffff_ffff_ffff, PmpCfg::napot(Permissions::all()));
 
         // enable hardware updates of page table entries' a and d bits
-        let menvcfg: usize;
-        asm!("csrr {}, menvcfg", out(reg) menvcfg);
-        asm!("csrw menvcfg, {}", in(reg) menvcfg | (1 << 61));
-
-        // get the id of the currently executing hardware thread
-        let hartid: usize;
-        asm!("csrr {}, mhartid", out(reg) hartid);
+        w_menvcfg(Menvcfg::empty().adue(true).stce(true));
 
         // initialize the bss memory section to 0
         // only one cpu is responsible for writing, and there always exists a cpu with id 0
+        let hartid = r_mhartid();
         if hartid == 0 {
             let ptr = BSS_ADDR as *mut u8;
             let len = STACK_ADDR - BSS_ADDR;
@@ -169,10 +159,10 @@ pub fn minit(mepc: usize) {
         }
 
         // set the thread pointer to the current cpu id
-        asm!("mv tp, {}", in(reg) hartid);
+        w_tp(hartid);
 
         // switch to supervisor mode and jump to `main`
-        asm!("mret");
+        mret();
     }
 }
 

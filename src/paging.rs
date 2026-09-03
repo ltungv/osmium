@@ -3,7 +3,7 @@
 pub mod page_table;
 pub mod sv39;
 
-use core::{arch::asm, fmt};
+use core::fmt;
 
 use crate::{
     Error,
@@ -13,6 +13,7 @@ use crate::{
         TRAMP_ADDR, TRAMPOLINE, paddr::PhysAddr, vaddr::VirtAddr,
     },
     paging::{page_table::PteFlags, sv39::Sv39},
+    riscv::{Satp, sfence_vma, w_satp},
     spinlock::Spinlock,
     uart::UART_BASE,
 };
@@ -127,11 +128,11 @@ pub fn kvminit() {
 pub fn kvminithart() {
     unsafe {
         // wait for any previous writes to the page table memory to finish
-        asm!("sfence.vma");
+        sfence_vma();
         // write to the satp register
-        asm!("csrw satp, {}", in(reg) KVM.lock().satp());
+        w_satp(KVM.lock().satp());
         // flush stale entries from the translation lookaside buffer
-        asm!("sfence.vma");
+        sfence_vma();
     }
 }
 
@@ -143,8 +144,8 @@ pub fn kvminithart() {
 pub struct PageTableMap<'t>(Option<Sv39<'t>>);
 
 impl<'t> PageTableMap<'t> {
-    fn satp(&self) -> usize {
-        self.0.as_ref().map_or_default(Sv39::satp)
+    fn satp(&self) -> Satp {
+        self.0.as_ref().map_or_else(Satp::bare, Sv39::satp)
     }
 
     fn root(&mut self, kmem: &mut Kmem) -> Result<&mut Sv39<'t>, Error> {
