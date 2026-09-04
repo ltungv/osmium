@@ -18,7 +18,7 @@ pub mod kheap;
 pub mod mem;
 pub mod paging;
 pub mod proc;
-mod riscv;
+pub mod riscv;
 pub mod spinlock;
 #[cfg(test)]
 mod test;
@@ -30,9 +30,9 @@ use core::sync::atomic::{self, AtomicBool};
 use mem::{BSS_ADDR, STACK_ADDR};
 
 use crate::riscv::{
-    ExceptionFlags, InterruptFlags, Menvcfg, Permissions, PmpCfg, Privilege, Satp, mret, r_mhartid,
-    r_mstatus, r_sie, w_medeleg, w_menvcfg, w_mepc, w_mideleg, w_mstatus, w_pmp0, w_satp, w_sie,
-    w_tp, wfi,
+    ExceptionFlags, InterruptFlags, PmpCfg, Privilege, Satp, mret, r_mcounteren, r_menvcfg,
+    r_mhartid, r_mstatus, r_sie, r_time, w_mcounteren, w_medeleg, w_menvcfg, w_mepc, w_mideleg,
+    w_mstatus, w_pmp0, w_satp, w_sie, w_stimecmp, w_tp, wfi,
 };
 
 #[cfg(test)]
@@ -72,7 +72,7 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 /// Kernel error.
 #[derive(Debug)]
 pub enum Error {
-    /// The kernel and/or its subsystems are in an invalid state.
+    /// The kernel could not map a virtual address to a physical address.
     BadMapping(paging::MappingError),
 
     /// The kernel and/or its subsystems reach an unexpected state.
@@ -127,28 +127,6 @@ macro_rules! main {
 /// to `mepc`.
 pub fn minit(mepc: usize) {
     unsafe {
-        // set `mstatus.mpp` to 1, so the cpu switch into supervisor mode after `mret` is called
-        w_mstatus(r_mstatus().mpp(Privilege::Supervisor));
-
-        // set `mepc` to the address of $path, so the cpu jumps to $path after `mret` is called
-        w_mepc(mepc);
-
-        // set `satp` to 0 to disable paging
-        w_satp(Satp::bare());
-
-        // delegate all exceptions and interrupts to supervisor mode
-        w_medeleg(ExceptionFlags::all());
-        w_mideleg(InterruptFlags::all());
-
-        // set `sie` to enable specific interrupts:
-        w_sie(r_sie() | InterruptFlags::SUPERVISOR_TIMER | InterruptFlags::SUPERVISOR_EXTERNAL);
-
-        // give supervisor mode access to all physical memory
-        w_pmp0(0x3f_ffff_ffff_ffff, PmpCfg::napot(Permissions::all()));
-
-        // enable hardware updates of page table entries' a and d bits
-        w_menvcfg(Menvcfg::empty().adue(true).stce(true));
-
         // initialize the bss memory section to 0
         // only one cpu is responsible for writing, and there always exists a cpu with id 0
         let hartid = r_mhartid();
@@ -157,10 +135,33 @@ pub fn minit(mepc: usize) {
             let len = STACK_ADDR - BSS_ADDR;
             core::slice::from_raw_parts_mut(ptr, len).fill(0);
         }
-
+        // set `mstatus.mpp` to 1, so the cpu switch into supervisor mode after `mret` is called
+        w_mstatus(r_mstatus().mpp(Privilege::Supervisor));
+        // set `mepc`, so the cpu jumps to the address in `mepc` after `mret` is called
+        w_mepc(mepc);
+        // set `satp` to disable paging
+        w_satp(Satp::bare());
+        // delegate all exceptions and interrupts to supervisor mode
+        w_medeleg(ExceptionFlags::all());
+        w_mideleg(InterruptFlags::all());
+        // set `sie` to enable specific interrupts:
+        w_sie(r_sie() | InterruptFlags::SUPERVISOR_TIMER | InterruptFlags::SUPERVISOR_EXTERNAL);
+        // give supervisor mode access to all physical memory
+        w_pmp0(
+            0x3f_ffff_ffff_ffff,
+            PmpCfg::napot()
+                .readable(true)
+                .writeable(true)
+                .executable(true),
+        );
+        // enable hardware updates of page table entries' a and d bits
+        w_menvcfg(r_menvcfg().adue(true).stce(true));
+        // allow supervisor to use stimecmp and time
+        w_mcounteren(r_mcounteren().tm(true));
+        // ask for the first timer interrupt
+        w_stimecmp(r_time() + 1_000_000);
         // set the thread pointer to the current cpu id
         w_tp(hartid);
-
         // switch to supervisor mode and jump to `main`
         mret();
     }
@@ -182,6 +183,8 @@ pub fn kinit() {
         paging::kvminithart();
         // object allocator
         kheap::init();
+        // install trap vectors
+        trap::inithart();
         // finish initialization
         INIT.store(true, atomic::Ordering::Release);
     } else {
@@ -191,6 +194,8 @@ pub fn kinit() {
         }
         // enable paging
         paging::kvminithart();
+        // install trap vectors
+        trap::inithart();
     }
     println!("cpu#{cpuid} started");
 }

@@ -10,6 +10,8 @@
     rustdoc::all
 )]
 
+use core::ptr::NonNull;
+
 use osmium::{
     main,
     mem::{TRAMP_ADDR, TRAMPOLINE, vaddr::VirtAddr},

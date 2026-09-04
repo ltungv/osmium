@@ -1,3 +1,7 @@
+//! Helpers for working with RISC-V assembly and registers.
+
+#![expect(missing_docs, clippy::missing_safety_doc)]
+
 use core::arch::asm;
 
 use crate::mem::ppn::PhysPageNumber;
@@ -47,6 +51,28 @@ pub unsafe fn r_mhartid() -> usize {
         asm!("csrr {}, mhartid", out(reg) id);
     }
     id
+}
+
+pub unsafe fn r_mcounteren() -> Mcounteren {
+    let bits: u32;
+    unsafe {
+        asm!("csrr {}, mcounteren", out(reg) bits);
+    }
+    Mcounteren { bits }
+}
+
+pub unsafe fn w_mcounteren(mcounteren: Mcounteren) {
+    unsafe {
+        asm!("csrw mcounteren, {}", in(reg) mcounteren.bits);
+    }
+}
+
+pub unsafe fn r_menvcfg() -> Menvcfg {
+    let bits: usize;
+    unsafe {
+        asm!("csrr {}, menvcfg", out(reg) bits);
+    }
+    Menvcfg { bits }
 }
 
 pub unsafe fn w_menvcfg(menvcfg: Menvcfg) {
@@ -114,6 +140,40 @@ pub unsafe fn s_sstatus(bits: usize) {
     }
 }
 
+pub unsafe fn w_sstatus(sstatus: Sstatus) {
+    unsafe {
+        asm!("csrw sstatus, {}", in(reg) sstatus.bits);
+    }
+}
+
+pub unsafe fn r_sepc() -> usize {
+    let sepc: usize;
+    unsafe {
+        asm!("csrr {}, sepc", out(reg) sepc);
+    }
+    sepc
+}
+
+pub unsafe fn w_sepc(sepc: usize) {
+    unsafe {
+        asm!("csrw sepc, {}", in(reg) sepc);
+    }
+}
+
+pub unsafe fn w_stvec(stvec: usize) {
+    unsafe {
+        asm!("csrw stvec, {}", in(reg) stvec);
+    }
+}
+
+pub unsafe fn r_scause() -> TrapCause {
+    let scause: usize;
+    unsafe {
+        asm!("csrr {}, scause", out(reg) scause);
+    }
+    TrapCause::from_code(scause).expect("scause should contain only known bits")
+}
+
 pub unsafe fn r_sie() -> InterruptFlags {
     let bits: usize;
     unsafe {
@@ -127,8 +187,23 @@ pub unsafe fn w_sie(flags: InterruptFlags) {
         asm!("csrw sie, {}", in(reg) flags.bits());
     }
 }
+
+pub unsafe fn r_time() -> usize {
+    let time: usize;
+    unsafe {
+        asm!("csrr {}, time", out(reg)time);
+    }
+    time
+}
+
+pub unsafe fn w_stimecmp(time: usize) {
+    unsafe {
+        asm!("csrw stimecmp, {}", in(reg) time);
+    }
+}
+
 /// RISC-V privilege levels.
-#[expect(dead_code)]
+#[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Privilege {
     /// The privilege level intended to be used by an application.
@@ -163,14 +238,6 @@ pub enum Privilege {
     Machine = 0b11,
 }
 
-bitflags::bitflags! {
-    pub struct Permissions: u8 {
-        const R = 1 << 0;
-        const W = 1 << 1;
-        const X = 1 << 2;
-    }
-}
-
 /// Causes for RISC-V's exceptions.
 #[derive(Debug, PartialEq, Eq)]
 #[repr(usize)]
@@ -189,6 +256,29 @@ pub enum ExceptionCause {
     InstructionPageFault = 0x000c,
     LoadPageFault = 0x000d,
     StorePageFault = 0x000f,
+}
+
+impl ExceptionCause {
+    pub const fn from_code(code: usize) -> Option<Self> {
+        let cause = match code {
+            0x0000 => Self::InstructionAddressMisaligned,
+            0x0001 => Self::InstructionAccessFault,
+            0x0002 => Self::IllegalInstruction,
+            0x0003 => Self::Breakpoint,
+            0x0004 => Self::LoadAddressMisaligned,
+            0x0005 => Self::LoadAddressFault,
+            0x0006 => Self::StoreAddressMisaligned,
+            0x0007 => Self::StoreAddressFault,
+            0x0008 => Self::EnvironmentCallFromUMode,
+            0x0009 => Self::EnvironmentCallFromSMode,
+            0x000b => Self::EnvironmentCallFromMMode,
+            0x000c => Self::InstructionPageFault,
+            0x000d => Self::LoadPageFault,
+            0x000f => Self::StorePageFault,
+            _ => return None,
+        };
+        Some(cause)
+    }
 }
 
 bitflags::bitflags! {
@@ -223,6 +313,22 @@ pub enum InterruptCause {
     CounterOverflow = 0x000d,
 }
 
+impl InterruptCause {
+    pub const fn from_code(cause: usize) -> Option<Self> {
+        let cause = match cause {
+            0x0001 => Self::SupervisorSoftware,
+            0x0003 => Self::MachineSoftware,
+            0x0005 => Self::SupervisorTimer,
+            0x0007 => Self::MachineTimer,
+            0x0009 => Self::SupervisorExternal,
+            0x000b => Self::MachineExternal,
+            0x000d => Self::CounterOverflow,
+            _ => return None,
+        };
+        Some(cause)
+    }
+}
+
 bitflags::bitflags! {
     pub struct InterruptFlags: usize {
         const SUPERVISOR_SOFTWARE = 1 << InterruptCause::SupervisorSoftware as usize;
@@ -235,15 +341,86 @@ bitflags::bitflags! {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum TrapCause {
+    Exception(ExceptionCause),
+    Interrupt(InterruptCause),
+}
+
+impl TrapCause {
+    pub const fn from_code(cause: usize) -> Option<Self> {
+        let intr_mask = 1 << (usize::BITS - 1);
+        let code_mask = intr_mask - 1;
+        let code = cause & code_mask;
+        if cause & intr_mask == intr_mask {
+            let Some(cause) = InterruptCause::from_code(code) else {
+                return None;
+            };
+            Some(Self::Interrupt(cause))
+        } else {
+            let Some(cause) = ExceptionCause::from_code(code) else {
+                return None;
+            };
+            Some(Self::Exception(cause))
+        }
+    }
+}
+
 pub struct PmpCfg {
     bits: u8,
 }
 
 impl PmpCfg {
-    pub const fn napot(perm: Permissions) -> Self {
-        Self {
-            bits: 0b11 << 3 | perm.bits(),
+    const R: u8 = 1 << 0;
+    const W: u8 = 1 << 1;
+    const X: u8 = 1 << 2;
+
+    pub const fn napot() -> Self {
+        Self { bits: 0b11 << 3 }
+    }
+
+    pub const fn readable(mut self, bit: bool) -> Self {
+        if bit {
+            self.bits |= Self::R;
+        } else {
+            self.bits &= !Self::R;
         }
+        self
+    }
+
+    pub const fn writeable(mut self, bit: bool) -> Self {
+        if bit {
+            self.bits |= Self::W;
+        } else {
+            self.bits &= !Self::W;
+        }
+        self
+    }
+
+    pub const fn executable(mut self, bit: bool) -> Self {
+        if bit {
+            self.bits |= Self::X;
+        } else {
+            self.bits &= !Self::X;
+        }
+        self
+    }
+}
+
+pub struct Mcounteren {
+    bits: u32,
+}
+
+impl Mcounteren {
+    const TM: u32 = 1 << 1;
+
+    pub const fn tm(mut self, bit: bool) -> Self {
+        if bit {
+            self.bits |= Self::TM;
+        } else {
+            self.bits &= !Self::TM;
+        }
+        self
     }
 }
 
@@ -252,12 +429,8 @@ pub struct Menvcfg {
 }
 
 impl Menvcfg {
-    pub const ADUE: usize = 1 << 61;
-    pub const STCE: usize = 1 << 63;
-
-    pub const fn empty() -> Self {
-        Self { bits: 0 }
-    }
+    const ADUE: usize = 1 << 61;
+    const STCE: usize = 1 << 63;
 
     pub const fn adue(mut self, bit: bool) -> Self {
         if bit {
@@ -315,5 +488,14 @@ impl Sstatus {
 
     pub const fn has(&self, bits: usize) -> bool {
         self.bits & bits == bits
+    }
+
+    pub const fn get_spp(&self) -> Privilege {
+        let mask = 1 << 8;
+        if self.bits & mask == mask {
+            Privilege::Supervisor
+        } else {
+            Privilege::User
+        }
     }
 }
