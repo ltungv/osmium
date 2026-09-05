@@ -1,6 +1,6 @@
 //! Process management.
 
-use crate::riscv::registers::{
+use crate::riscv::{
     sstatus::{self, Sstatus},
     tp,
 };

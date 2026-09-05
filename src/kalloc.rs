@@ -205,7 +205,6 @@ impl Kmem {
 /// Each frame in the managed region has a corresponding [`Header`] that stores
 /// the linked list pointer for the free list, the order of the block it belongs to,
 /// and whether the block is currently allocated.
-#[derive(Default, Debug)]
 struct Header {
     /// The index of the next block in the free list for this block's order.
     next: Option<usize>,
@@ -226,7 +225,11 @@ impl Header {
         let headers_ptr = unsafe { addr.direct().as_ptr_mut::<Self>() };
         for i in 0..len {
             unsafe {
-                headers_ptr.add(i).write(Self::default());
+                headers_ptr.add(i).write(Self {
+                    next: None,
+                    order: 0,
+                    taken: false,
+                });
             }
         }
         unsafe { slice::from_raw_parts_mut(headers_ptr, len) }

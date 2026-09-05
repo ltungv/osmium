@@ -14,8 +14,8 @@ use crate::{
     },
     paging::{page_table::PteFlags, sv39::Sv39},
     riscv::{
-        asm::sfence_vma_all,
-        registers::satp::{self, Satp},
+        satp::{self, Satp},
+        sfence_vma_all,
     },
     spinlock::Spinlock,
     uart::UART_BASE,

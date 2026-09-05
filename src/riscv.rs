@@ -1,10 +1,29 @@
 //! Helpers for working with RISC-V assembly and registers.
 
-pub mod asm;
-pub mod registers;
+#![expect(missing_docs, clippy::missing_safety_doc)]
+
+use core::arch::asm;
+
+pub mod mcounteren;
+pub mod medeleg;
+pub mod menvcfg;
+pub mod mepc;
+pub mod mhartid;
+pub mod mideleg;
+pub mod mstatus;
+pub mod pmp;
+pub mod satp;
+pub mod scause;
+pub mod sepc;
+pub mod sie;
+pub mod sstatus;
+pub mod stimecmp;
+pub mod stvec;
+pub mod time;
+pub mod tp;
 
 /// RISC-V privilege levels.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 #[repr(u8)]
 pub enum Privilege {
     /// The privilege level intended to be used by an application.
@@ -166,5 +185,21 @@ impl TrapCause {
             };
             Some(Self::Exception(cause))
         }
+    }
+}
+
+/// SFENCE.VMA instruction wrapper (all address spaces and page table levels).
+#[inline(always)]
+pub fn sfence_vma_all() {
+    unsafe {
+        asm!("sfence.vma zero, zero");
+    }
+}
+
+/// WFI instruction wrapper.
+#[inline(always)]
+pub fn wfi() {
+    unsafe {
+        asm!("wfi");
     }
 }

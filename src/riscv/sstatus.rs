@@ -13,7 +13,7 @@ impl Sstatus {
         self.bits & status.bits == status.bits
     }
 
-    pub const fn get_spp(&self) -> Privilege {
+    pub const fn spp(&self) -> Privilege {
         let mask = 1 << 8;
         if self.bits & mask == mask {
             Privilege::Supervisor

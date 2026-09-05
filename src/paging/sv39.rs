@@ -10,7 +10,7 @@ use crate::{
         MappingError,
         page_table::{PageTable, PageTableEntry, PteFlags},
     },
-    riscv::registers::satp::Satp,
+    riscv::satp::Satp,
 };
 
 /// A 39-bit virtual address space.
@@ -60,8 +60,7 @@ impl<'t> Sv39<'t> {
                     let ppn = kmem.alloc(0).ok_or(Error::OutOfMemory)?;
                     let page_table = unsafe { ppn.page_table_mut() };
                     page_table.zero();
-                    pte.set_ppn(ppn);
-                    pte.set_flags(PteFlags::V);
+                    *pte = pte.with_ppn(ppn).with_flags(PteFlags::V);
                     page_table
                 };
                 pte = &mut page_table[index_next];
@@ -69,8 +68,7 @@ impl<'t> Sv39<'t> {
             if pte.flags().contains(PteFlags::V) {
                 return Err(Error::BadMapping(MappingError::Remap(vaddr)));
             }
-            pte.set_ppn(ppn);
-            pte.set_flags(flags | PteFlags::V);
+            *pte = pte.with_ppn(ppn).with_flags(flags | PteFlags::V);
             vpn = vpn + 1;
             ppn = ppn + 1;
         }
