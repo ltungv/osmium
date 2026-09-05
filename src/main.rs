@@ -10,10 +10,8 @@
     rustdoc::all
 )]
 
-use core::ptr::NonNull;
-
 use osmium::{
-    main,
+    abort, main,
     mem::{TRAMP_ADDR, TRAMPOLINE, vaddr::VirtAddr},
     paging, println,
 };
@@ -44,7 +42,5 @@ extern "C" fn main() {
     println!("{vaddr1:p} --> {paddr1:p}");
     println!("{vaddr2:p} --> {paddr2:p}");
 
-    loop {
-        core::hint::spin_loop();
-    }
+    abort();
 }

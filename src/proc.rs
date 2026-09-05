@@ -1,6 +1,9 @@
 //! Process management.
 
-use crate::riscv::{Sstatus, r_sstatus, r_tp, rc_sstatus, s_sstatus};
+use crate::riscv::registers::{
+    sstatus::{self, Sstatus},
+    tp,
+};
 
 /// Total number of CPUs in the system.
 pub const NCPU: usize = 4;
@@ -33,7 +36,7 @@ impl Cpu {
 /// Interrupt must be disable before calling this function to avoid racing with another thread on
 /// the `tp` register when a context switch occurs.
 pub unsafe fn cpuid() -> usize {
-    unsafe { r_tp() }
+    unsafe { tp::read() }
 }
 
 /// The lifecycle of this struct determines a section of the program's execution where interrupts
@@ -55,7 +58,7 @@ impl Default for PushOff {
 
 impl Drop for PushOff {
     fn drop(&mut self) {
-        let sstatus = unsafe { r_sstatus() };
+        let sstatus = unsafe { sstatus::read() };
         if sstatus.has(Sstatus::SIE) {
             panic!("pop_intr_disable - interruptible");
         }
@@ -63,7 +66,7 @@ impl Drop for PushOff {
         cpu.push_offs -= 1;
         if cpu.push_offs == 0 && cpu.intr_enabled {
             unsafe {
-                s_sstatus(Sstatus::SIE);
+                sstatus::set(Sstatus::SIE);
             }
         }
     }
@@ -75,7 +78,7 @@ impl PushOff {
     pub fn new() -> Self {
         let cpu = Cpu::current();
         if cpu.push_offs == 0 {
-            let sstatus = unsafe { rc_sstatus(Sstatus::SIE) };
+            let sstatus = unsafe { sstatus::read_clear(Sstatus::SIE) };
             cpu.intr_enabled = sstatus.has(Sstatus::SIE);
         }
         cpu.push_offs += 1;
