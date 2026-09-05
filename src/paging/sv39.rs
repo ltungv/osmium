@@ -10,7 +10,7 @@ use crate::{
         MappingError,
         page_table::{PageTable, PageTableEntry, PteFlags},
     },
-    riscv::Satp,
+    riscv::registers::satp::Satp,
 };
 
 /// A 39-bit virtual address space.

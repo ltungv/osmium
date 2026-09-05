@@ -30,9 +30,18 @@ use core::sync::atomic::{self, AtomicBool};
 use mem::{BSS_ADDR, STACK_ADDR};
 
 use crate::riscv::{
-    ExceptionFlags, InterruptFlags, PmpCfg, Privilege, Satp, mret, r_mcounteren, r_menvcfg,
-    r_mhartid, r_mstatus, r_sie, r_time, w_mcounteren, w_medeleg, w_menvcfg, w_mepc, w_mideleg,
-    w_mstatus, w_pmp0, w_satp, w_sie, w_stimecmp, w_tp, wfi,
+    ExceptionFlags, InterruptFlags, Privilege,
+    asm::wfi,
+    registers::{
+        self,
+        mcounteren::{self, Mcounteren},
+        medeleg,
+        menvcfg::{self, Menvcfg},
+        mepc, mhartid, mideleg, mstatus,
+        pmp::{self, PmpCfg},
+        satp::{self, Satp},
+        sie, stimecmp, tp,
+    },
 };
 
 #[cfg(test)]
@@ -45,6 +54,8 @@ extern "C" fn test_main() {
     let cpuid = unsafe { proc::cpuid() };
     if cpuid == 0 {
         kernel_test();
+    } else {
+        abort();
     }
 }
 
@@ -97,10 +108,7 @@ impl core::fmt::Display for Error {
 /// Abort execution, preventing the current CPU from execution.
 pub fn abort() -> ! {
     loop {
-        unsafe {
-            wfi();
-        }
-        core::hint::spin_loop();
+        wfi();
     }
 }
 
@@ -125,45 +133,46 @@ macro_rules! main {
 
 /// Configure the system in machine mode, switch into supervisor mode, and jump to the address given
 /// to `mepc`.
+#[inline(always)]
 pub fn minit(mepc: usize) {
     unsafe {
         // initialize the bss memory section to 0
         // only one cpu is responsible for writing, and there always exists a cpu with id 0
-        let hartid = r_mhartid();
+        let hartid = mhartid::read();
         if hartid == 0 {
             let ptr = BSS_ADDR as *mut u8;
             let len = STACK_ADDR - BSS_ADDR;
             core::slice::from_raw_parts_mut(ptr, len).fill(0);
         }
         // set `mstatus.mpp` to 1, so the cpu switch into supervisor mode after `mret` is called
-        w_mstatus(r_mstatus().mpp(Privilege::Supervisor));
+        mstatus::write(mstatus::read().mpp(Privilege::Supervisor));
         // set `mepc`, so the cpu jumps to the address in `mepc` after `mret` is called
-        w_mepc(mepc);
+        mepc::write(mepc);
         // set `satp` to disable paging
-        w_satp(Satp::bare());
+        satp::write(Satp::bare());
         // delegate all exceptions and interrupts to supervisor mode
-        w_medeleg(ExceptionFlags::all());
-        w_mideleg(InterruptFlags::all());
+        medeleg::write(ExceptionFlags::all());
+        mideleg::write(InterruptFlags::all());
         // set `sie` to enable specific interrupts:
-        w_sie(r_sie() | InterruptFlags::SUPERVISOR_TIMER | InterruptFlags::SUPERVISOR_EXTERNAL);
+        sie::write(
+            sie::read() | InterruptFlags::SUPERVISOR_TIMER | InterruptFlags::SUPERVISOR_EXTERNAL,
+        );
         // give supervisor mode access to all physical memory
-        w_pmp0(
+        pmp::write0(
             0x3f_ffff_ffff_ffff,
             PmpCfg::napot()
-                .readable(true)
-                .writeable(true)
-                .executable(true),
+                .with(PmpCfg::R)
+                .with(PmpCfg::W)
+                .with(PmpCfg::X),
         );
         // enable hardware updates of page table entries' a and d bits
-        w_menvcfg(r_menvcfg().adue(true).stce(true));
+        menvcfg::write(menvcfg::read().with(Menvcfg::ADUE).with(Menvcfg::STCE));
         // allow supervisor to use stimecmp and time
-        w_mcounteren(r_mcounteren().tm(true));
+        mcounteren::write(mcounteren::read().with(Mcounteren::TM));
         // ask for the first timer interrupt
-        w_stimecmp(r_time() + 1_000_000);
+        stimecmp::write(registers::time::read() + 1_000_000);
         // set the thread pointer to the current cpu id
-        w_tp(hartid);
-        // switch to supervisor mode and jump to `main`
-        mret();
+        tp::write(hartid);
     }
 }
 
@@ -197,5 +206,4 @@ pub fn kinit() {
         // install trap vectors
         trap::inithart();
     }
-    println!("cpu#{cpuid} started");
 }

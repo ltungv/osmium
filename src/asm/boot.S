@@ -19,6 +19,8 @@ _entry:
   add sp, sp, a0
   // jump into rust
   call minit
+  // switch to supervisor mode and jump to the address in `mepc`
+  mret
 
 spin:
   j spin

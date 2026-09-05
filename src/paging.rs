@@ -13,7 +13,10 @@ use crate::{
         TRAMP_ADDR, TRAMPOLINE, paddr::PhysAddr, vaddr::VirtAddr,
     },
     paging::{page_table::PteFlags, sv39::Sv39},
-    riscv::{Satp, sfence_vma, w_satp},
+    riscv::{
+        asm::sfence_vma_all,
+        registers::satp::{self, Satp},
+    },
     spinlock::Spinlock,
     uart::UART_BASE,
 };
@@ -128,11 +131,11 @@ pub fn kvminit() {
 pub fn kvminithart() {
     unsafe {
         // wait for any previous writes to the page table memory to finish
-        sfence_vma();
+        sfence_vma_all();
         // write to the satp register
-        w_satp(KVM.lock().satp());
+        satp::write(KVM.lock().satp());
         // flush stale entries from the translation lookaside buffer
-        sfence_vma();
+        sfence_vma_all();
     }
 }
 

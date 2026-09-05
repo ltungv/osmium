@@ -2,8 +2,12 @@
 use crate::{
     println,
     riscv::{
-        InterruptCause, Privilege, Sstatus, TrapCause, r_scause, r_sepc, r_sstatus, w_sepc,
-        w_sstatus, w_stvec,
+        InterruptCause, Privilege, TrapCause,
+        registers::{
+            scause, sepc,
+            sstatus::{self, Sstatus},
+            stvec,
+        },
     },
 };
 
@@ -14,7 +18,7 @@ unsafe extern "C" {
 /// Install the supervisor trap vector which is located at `kernelvec`.
 pub fn inithart() {
     unsafe {
-        w_stvec(kernelvec as *const () as usize);
+        stvec::write(kernelvec as *const () as usize);
     }
 }
 
@@ -24,19 +28,19 @@ pub fn inithart() {
 /// function to handle the trap.
 #[unsafe(no_mangle)]
 extern "C" fn kerneltrap() {
-    let sstatus = unsafe { r_sstatus() };
+    let sstatus = unsafe { sstatus::read() };
     if sstatus.get_spp() != Privilege::Supervisor {
         panic!("kerneltrap - not from supervisor mode");
     }
     if sstatus.has(Sstatus::SIE) {
         panic!("kerneltrap - interrupts enabled");
     }
-    let scause = unsafe { r_scause() };
-    let TrapCause::Interrupt(intr) = scause else {
-        println!("unexpected exception {scause:?}");
+    let cause = unsafe { scause::read() };
+    let TrapCause::Interrupt(intr) = cause else {
+        println!("unexpected exception {cause:?}");
         panic!("kerneltrap");
     };
-    let sepc = unsafe { r_sepc() };
+    let epc = unsafe { sepc::read() };
     match intr {
         InterruptCause::SupervisorExternal => {
             println!("t-intr");
@@ -50,8 +54,8 @@ extern "C" fn kerneltrap() {
         }
     }
     unsafe {
-        w_sepc(sepc);
-        w_sstatus(sstatus);
+        sepc::write(epc);
+        sstatus::write(sstatus);
     }
 }
 
