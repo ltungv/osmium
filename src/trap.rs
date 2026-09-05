@@ -2,12 +2,9 @@
 use crate::{
     println,
     riscv::{
-        InterruptCause, Privilege, TrapCause,
-        registers::{
-            scause, sepc,
-            sstatus::{self, Sstatus},
-            stvec,
-        },
+        InterruptCause, Privilege, TrapCause, scause, sepc,
+        sstatus::{self, Sstatus},
+        stvec,
     },
 };
 
@@ -29,7 +26,7 @@ pub fn inithart() {
 #[unsafe(no_mangle)]
 extern "C" fn kerneltrap() {
     let sstatus = unsafe { sstatus::read() };
-    if sstatus.get_spp() != Privilege::Supervisor {
+    if sstatus.spp() != Privilege::Supervisor {
         panic!("kerneltrap - not from supervisor mode");
     }
     if sstatus.has(Sstatus::SIE) {

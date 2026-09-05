@@ -31,17 +31,13 @@ use mem::{BSS_ADDR, STACK_ADDR};
 
 use crate::riscv::{
     ExceptionFlags, InterruptFlags, Privilege,
-    asm::wfi,
-    registers::{
-        self,
-        mcounteren::{self, Mcounteren},
-        medeleg,
-        menvcfg::{self, Menvcfg},
-        mepc, mhartid, mideleg, mstatus,
-        pmp::{self, PmpCfg},
-        satp::{self, Satp},
-        sie, stimecmp, tp,
-    },
+    mcounteren::{self, Mcounteren},
+    medeleg,
+    menvcfg::{self, Menvcfg},
+    mepc, mhartid, mideleg, mstatus,
+    pmp::{self, PmpCfg},
+    satp::{self, Satp},
+    sie, stimecmp, tp, wfi,
 };
 
 #[cfg(test)]
@@ -145,7 +141,7 @@ pub fn minit(mepc: usize) {
             core::slice::from_raw_parts_mut(ptr, len).fill(0);
         }
         // set `mstatus.mpp` to 1, so the cpu switch into supervisor mode after `mret` is called
-        mstatus::write(mstatus::read().mpp(Privilege::Supervisor));
+        mstatus::write(mstatus::read().with_mpp(Privilege::Supervisor));
         // set `mepc`, so the cpu jumps to the address in `mepc` after `mret` is called
         mepc::write(mepc);
         // set `satp` to disable paging
@@ -170,7 +166,7 @@ pub fn minit(mepc: usize) {
         // allow supervisor to use stimecmp and time
         mcounteren::write(mcounteren::read().with(Mcounteren::TM));
         // ask for the first timer interrupt
-        stimecmp::write(registers::time::read() + 1_000_000);
+        stimecmp::write(riscv::time::read() + 1_000_000);
         // set the thread pointer to the current cpu id
         tp::write(hartid);
     }

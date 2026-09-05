@@ -7,7 +7,7 @@ pub struct Mstatus {
 }
 
 impl Mstatus {
-    pub const fn mpp(mut self, privilege: Privilege) -> Self {
+    pub const fn with_mpp(mut self, privilege: Privilege) -> Self {
         self.bits &= !(0b11 << 11);
         self.bits |= (privilege as usize) << 11;
         self

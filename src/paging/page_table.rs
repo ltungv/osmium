@@ -12,7 +12,6 @@ use crate::mem::{ppn::PhysPageNumber, vpn::VirtPageNumber};
 /// and occupies exactly one 4096-byte physical page.
 #[repr(C)]
 #[repr(align(4096))]
-#[derive(Debug)]
 pub struct PageTable([PageTableEntry; 512]);
 
 impl Default for PageTable {
@@ -90,7 +89,7 @@ bitflags! {
 /// A PTE contains the physical page number (PPN) of either the next level
 /// page table or the actual mapped physical frame. It also contains flags
 /// describing the mapping's permissions and state.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct PageTableEntry(usize);
 
 impl PageTableEntry {
@@ -110,17 +109,19 @@ impl PageTableEntry {
     }
 
     /// Sets the physical page number (PPN) in the page table entry.
-    pub const fn set_ppn(&mut self, ppn: PhysPageNumber) {
+    pub const fn with_ppn(mut self, ppn: PhysPageNumber) -> Self {
         let mask = ((1 << PhysPageNumber::BITS) - 1) << 10;
         self.0 &= !mask;
         self.0 |= ppn.get() << 10;
+        self
     }
 
     /// Sets the permission flags in the page table entry.
-    pub const fn set_flags(&mut self, flags: PteFlags) {
+    pub const fn with_flags(mut self, flags: PteFlags) -> Self {
         let mask = 0xff;
         self.0 &= !mask;
         self.0 |= flags.bits();
+        self
     }
 
     /// Translates the given virtual page number (VPN) to a physical page number (PPN)
