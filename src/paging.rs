@@ -21,7 +21,7 @@ use crate::{
     uart::UART_BASE,
 };
 
-static KVM: Spinlock<PageTableMap> = Spinlock::new(PageTableMap(None));
+static KVM: Spinlock<PageTableMap> = Spinlock::new("kvm", PageTableMap(None));
 
 /// Gets a reference to the kernel's page table.
 pub fn kvm() -> &'static Spinlock<PageTableMap<'static>> {

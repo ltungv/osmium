@@ -28,8 +28,7 @@ pub mod uart;
 use core::sync::atomic::{self, AtomicBool};
 
 use mem::{BSS_ADDR, STACK_ADDR};
-
-use crate::riscv::{
+use riscv::{
     ExceptionFlags, InterruptFlags, Privilege,
     mcounteren::{self, Mcounteren},
     medeleg,
@@ -41,7 +40,7 @@ use crate::riscv::{
 };
 
 #[cfg(test)]
-main!(test_main);
+start!(test_main);
 
 #[cfg(test)]
 #[unsafe(no_mangle)]
@@ -114,7 +113,7 @@ pub fn abort() -> ! {
 /// system. Once configured, all CPUs switch into supervisor mode and jump the address of the
 /// function that was given to this macro.
 #[macro_export]
-macro_rules! main {
+macro_rules! start {
     ($path:path) => {
         #[unsafe(export_name = "minit")]
         extern "C" fn __impl_start() {

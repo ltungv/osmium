@@ -27,7 +27,7 @@ macro_rules! println {
     ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
 }
 
-static CONSOLE: Spinlock<Console> = Spinlock::new(Console(None));
+static CONSOLE: Spinlock<Console> = Spinlock::new("console", Console(None));
 
 /// Print using the global uart driver.
 pub fn print(args: core::fmt::Arguments<'_>) {

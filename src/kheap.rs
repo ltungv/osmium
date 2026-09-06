@@ -20,7 +20,7 @@ fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
 }
 
 #[global_allocator]
-static KHEAP: KernelHeap = KernelHeap(Spinlock::new(LinkedHeap::empty()));
+static KHEAP: KernelHeap = KernelHeap(Spinlock::new("kheap", LinkedHeap::empty()));
 
 /// Initializes the kernel heap.
 ///
