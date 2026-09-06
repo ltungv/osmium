@@ -10,20 +10,24 @@ pub const NCPU: usize = 4;
 
 /// Per CPU metadata.
 pub struct Cpu {
-    push_offs: usize,
     intr_enabled: bool,
+    intr_disables: usize,
 }
 
 impl Cpu {
     const fn zero() -> Self {
         Cpu {
-            push_offs: 0,
             intr_enabled: false,
+            intr_disables: 0,
         }
     }
 
     /// Get a mutable reference to metadata of this CPU.
-    pub fn current() -> &'static mut Self {
+    ///
+    /// # Safety
+    ///
+    /// See [`cpuid`] for details.
+    pub unsafe fn current() -> &'static mut Self {
         static mut CPUS: [Cpu; 4] = [const { Cpu::zero() }; 4];
         unsafe { &mut CPUS[cpuid()] }
     }
@@ -48,23 +52,23 @@ pub unsafe fn cpuid() -> usize {
 ///
 /// When the first [`PushOff`] is created, all interrupts are disable until the last [`PushOff`]
 /// falls out of scope.
-pub struct PushOff;
+pub struct IntrDisable;
 
-impl Default for PushOff {
+impl Default for IntrDisable {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for PushOff {
+impl Drop for IntrDisable {
     fn drop(&mut self) {
         let sstatus = unsafe { sstatus::read() };
         if sstatus.has(Sstatus::SIE) {
-            panic!("pop_intr_disable - interruptible");
+            panic!("intr_disable - interruptible");
         }
-        let cpu = Cpu::current();
-        cpu.push_offs -= 1;
-        if cpu.push_offs == 0 && cpu.intr_enabled {
+        let cpu = unsafe { Cpu::current() };
+        cpu.intr_disables -= 1;
+        if cpu.intr_disables == 0 && cpu.intr_enabled {
             unsafe {
                 sstatus::set(Sstatus::SIE);
             }
@@ -72,16 +76,16 @@ impl Drop for PushOff {
     }
 }
 
-impl PushOff {
+impl IntrDisable {
     /// Creates a new [`PushOff`], ensuring that the curent CPU has all interrupts disabled for the
     /// lifetime of the [`PushOff`] instance.
     pub fn new() -> Self {
         let sstatus = unsafe { sstatus::read_clear(Sstatus::SIE) };
-        let cpu = Cpu::current();
-        if cpu.push_offs == 0 {
+        let cpu = unsafe { Cpu::current() };
+        if cpu.intr_disables == 0 {
             cpu.intr_enabled = sstatus.has(Sstatus::SIE);
         }
-        cpu.push_offs += 1;
+        cpu.intr_disables += 1;
         Self
     }
 }
