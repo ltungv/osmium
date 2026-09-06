@@ -17,11 +17,14 @@ use crate::{
 
 const MAX_ORDER: usize = 12;
 
-static KMEM: Spinlock<Kmem> = Spinlock::new(Kmem {
-    addr: PhysPageNumber::new(0),
-    headers: &mut [],
-    free_list: [const { None }; MAX_ORDER + 1],
-});
+static KMEM: Spinlock<Kmem> = Spinlock::new(
+    "kmem",
+    Kmem {
+        addr: PhysPageNumber::new(0),
+        headers: &mut [],
+        free_list: [const { None }; MAX_ORDER + 1],
+    },
+);
 
 /// Returns a reference to the global physical memory allocator.
 pub fn kmem() -> &'static Spinlock<Kmem> {

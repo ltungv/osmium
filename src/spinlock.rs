@@ -13,6 +13,7 @@ use crate::proc::{PushOff, cpuid};
 pub struct Spinlock<T: ?Sized> {
     locked: AtomicBool,
     cpu: Cell<usize>,
+    name: &'static str,
     data: UnsafeCell<T>,
 }
 
@@ -24,10 +25,11 @@ unsafe impl<T: ?Sized> Send for SpinlockGuard<'_, T> where for<'a> &'a mut T: Se
 
 impl<T> Spinlock<T> {
     /// Creates a new spinlock protecting the given `data`.
-    pub const fn new(data: T) -> Self {
+    pub const fn new(name: &'static str, data: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
             cpu: Cell::new(0),
+            name,
             data: UnsafeCell::new(data),
         }
     }
@@ -36,6 +38,7 @@ impl<T> Spinlock<T> {
 impl<T: ?Sized> Spinlock<T> {
     /// Returns whether the current CPU is holding this lock.
     pub fn holding(&self) -> bool {
+        let _push_off = PushOff::new();
         let cpuid = unsafe { cpuid() };
         self.locked.load(atomic::Ordering::Relaxed) && self.cpu.get() == cpuid
     }
@@ -45,7 +48,11 @@ impl<T: ?Sized> Spinlock<T> {
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let mut _push_off = PushOff::new();
         if self.holding() {
-            panic!("spinlock - reentrance")
+            panic!(
+                "spinlock ({}) - reentrance on cpu#{}",
+                self.name,
+                self.cpu.get()
+            );
         }
         loop {
             match self.try_lock(_push_off) {

@@ -76,9 +76,9 @@ impl PushOff {
     /// Creates a new [`PushOff`], ensuring that the curent CPU has all interrupts disabled for the
     /// lifetime of the [`PushOff`] instance.
     pub fn new() -> Self {
+        let sstatus = unsafe { sstatus::read_clear(Sstatus::SIE) };
         let cpu = Cpu::current();
         if cpu.push_offs == 0 {
-            let sstatus = unsafe { sstatus::read_clear(Sstatus::SIE) };
             cpu.intr_enabled = sstatus.has(Sstatus::SIE);
         }
         cpu.push_offs += 1;

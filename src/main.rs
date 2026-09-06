@@ -10,13 +10,15 @@
     rustdoc::all
 )]
 
+use core::arch::asm;
+
 use osmium::{
-    abort, main,
+    abort,
     mem::{TRAMP_ADDR, TRAMPOLINE, vaddr::VirtAddr},
-    paging, println,
+    paging, println, start,
 };
 
-main!(main);
+start!(main);
 
 /// The main Rust entry point of the kernel.
 ///
@@ -41,6 +43,12 @@ extern "C" fn main() {
     assert_eq!(paddr1, paddr2);
     println!("{vaddr1:p} --> {paddr1:p}");
     println!("{vaddr2:p} --> {paddr2:p}");
+
+    let a: usize;
+    unsafe {
+        asm!("csrr {}, mhartid", out(reg) a);
+    }
+    println!("{a}");
 
     abort();
 }
