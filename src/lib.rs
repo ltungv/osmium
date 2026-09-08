@@ -176,6 +176,7 @@ pub fn kinit() {
     static INIT: AtomicBool = AtomicBool::new(false);
     let cpuid = unsafe { proc::cpuid() };
     if cpuid == 0 {
+        uart::init();
         println!();
         println!("osmium kernel is booting");
         println!();
