@@ -54,9 +54,6 @@ extern "C" fn test_main() {
     }
 }
 
-#[unsafe(no_mangle)]
-const extern "C" fn eh_personality() {}
-
 #[cfg(test)]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
