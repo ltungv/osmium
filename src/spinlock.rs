@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{self, AtomicBool},
 };
 
-use crate::proc::{IntrDisable, cpuid};
+use crate::proc::{CpuPin, cpuid};
 
 /// A spin-based lock providing mutually exclusive access to data.
 pub struct Spinlock<T: ?Sized> {
@@ -38,7 +38,6 @@ impl<T> Spinlock<T> {
 impl<T: ?Sized> Spinlock<T> {
     /// Returns whether the current CPU is holding this lock.
     pub fn holding(&self) -> bool {
-        let _intr_disable = IntrDisable::new();
         let cpuid = unsafe { cpuid() };
         self.locked.load(atomic::Ordering::Relaxed) && self.cpu.get() == cpuid
     }
@@ -46,7 +45,7 @@ impl<T: ?Sized> Spinlock<T> {
     /// Acquires the lock if it has not been acquired. Otherwise, blocks the current CPU until the
     /// lock can be acquired.
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
-        let mut _intr_disable = IntrDisable::new();
+        let mut pin = CpuPin::new();
         if self.holding() {
             panic!(
                 "spinlock ({}) - reentrance on cpu#{}",
@@ -55,10 +54,10 @@ impl<T: ?Sized> Spinlock<T> {
             );
         }
         loop {
-            match self.try_lock(_intr_disable) {
+            match self.try_lock(pin) {
                 Ok(guard) => break guard,
-                Err(intr_disable) => {
-                    _intr_disable = intr_disable;
+                Err(pin_) => {
+                    pin = pin_;
                 }
             }
             while self.locked.load(atomic::Ordering::Relaxed) {
@@ -67,7 +66,7 @@ impl<T: ?Sized> Spinlock<T> {
         }
     }
 
-    fn try_lock(&self, _intr_disable: IntrDisable) -> Result<SpinlockGuard<'_, T>, IntrDisable> {
+    fn try_lock(&self, pin: CpuPin) -> Result<SpinlockGuard<'_, T>, CpuPin> {
         if self
             .locked
             .compare_exchange_weak(
@@ -81,10 +80,10 @@ impl<T: ?Sized> Spinlock<T> {
             self.cpu.set(unsafe { cpuid() });
             Ok(SpinlockGuard {
                 lock: self,
-                _intr_disable,
+                _pin: pin,
             })
         } else {
-            Err(_intr_disable)
+            Err(pin)
         }
     }
 }
@@ -92,7 +91,7 @@ impl<T: ?Sized> Spinlock<T> {
 /// A guard protecting access to data behinds a [`SpinLock`]
 pub struct SpinlockGuard<'l, T: ?Sized + 'l> {
     lock: &'l Spinlock<T>,
-    _intr_disable: IntrDisable,
+    _pin: CpuPin,
 }
 
 impl<'l, T: ?Sized> Drop for SpinlockGuard<'l, T> {
