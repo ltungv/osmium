@@ -137,6 +137,7 @@ impl Kmem {
                 let buddy_idx = idx ^ (1 << o);
                 self.push_free(o, buddy_idx);
             }
+            self.headers[idx].order = order as u8;
             return Some(self.addr + idx);
         }
         None
