@@ -1,8 +1,8 @@
 const ASM_FILES: [&str; 4] = [
-    "src/asm/boot.S",
-    "src/asm/mem.S",
-    "src/asm/trampoline.S",
-    "src/asm/trap.S",
+    "src/kernel/asm/boot.S",
+    "src/kernel/asm/mem.S",
+    "src/kernel/asm/trampoline.S",
+    "src/kernel/asm/trap.S",
 ];
 
 fn main() {

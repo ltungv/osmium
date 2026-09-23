@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{self, AtomicBool},
 };
 
-use crate::proc::{CpuPin, cpuid};
+use crate::kernel::proc::{CpuPin, cpuid};
 
 /// A spin-based lock providing mutually exclusive access to data.
 pub struct Spinlock<T: ?Sized> {

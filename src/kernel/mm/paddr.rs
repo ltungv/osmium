@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use crate::mem::{PAGE_SIZE, align_up, ppn::PhysPageNumber, vaddr::VirtAddr};
+use crate::kernel::mm::{PAGE_SIZE, align_up, ppn::PhysPageNumber, vaddr::VirtAddr};
 
 /// A physical memory address.
 ///
@@ -74,7 +74,7 @@ impl fmt::Pointer for PhysAddr {
 
 #[cfg(test)]
 mod tests {
-    use crate::mem::paddr::PhysAddr;
+    use crate::kernel::mm::paddr::PhysAddr;
 
     #[test_case]
     fn new_checked() {

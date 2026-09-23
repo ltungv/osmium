@@ -4,11 +4,15 @@ use core::marker::PhantomData;
 
 use crate::{
     Error,
-    kalloc::Kmem,
-    mem::{PAGE_SIZE, align_down, paddr::PhysAddr, ppn::PhysPageNumber, vaddr::VirtAddr},
-    paging::{
-        MappingError,
-        page_table::{PageTable, PageTableEntry, PteFlags},
+    kernel::{
+        mm::{
+            PAGE_SIZE, align_down, kalloc::Kmem, paddr::PhysAddr, ppn::PhysPageNumber,
+            vaddr::VirtAddr,
+        },
+        vm::{
+            MappingError,
+            page_table::{PageTable, PageTableEntry, PteFlags},
+        },
     },
     riscv::satp::Satp,
 };

@@ -7,18 +7,22 @@ use core::fmt;
 
 use crate::{
     Error,
-    kalloc::{self, Kmem},
-    mem::{
-        BSS_ADDR, DATA_ADDR, HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, RODATA_ADDR, STACK_ADDR,
-        TRAMP_ADDR, TRAMPOLINE, paddr::PhysAddr, vaddr::VirtAddr,
+    device::uart::UART_BASE,
+    kernel::{
+        mm::{
+            BSS_ADDR, DATA_ADDR, HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, RODATA_ADDR, STACK_ADDR,
+            TRAMP_ADDR, TRAMPOLINE,
+            kalloc::{self, Kmem},
+            paddr::PhysAddr,
+            vaddr::VirtAddr,
+        },
+        sync::spinlock::Spinlock,
+        vm::{page_table::PteFlags, sv39::Sv39},
     },
-    paging::{page_table::PteFlags, sv39::Sv39},
     riscv::{
         satp::{self, Satp},
         sfence_vma_all,
     },
-    spinlock::Spinlock,
-    uart::UART_BASE,
 };
 
 static KVM: Spinlock<PageTableMap> = Spinlock::new("kvm", PageTableMap(None));
@@ -35,8 +39,8 @@ pub fn kvminit() {
 
     #[cfg(test)]
     kvm.map(
-        VirtAddr::new(crate::test::SIFIVE_BASE),
-        PhysAddr::new(crate::test::SIFIVE_BASE),
+        VirtAddr::new(crate::kernel::test::SIFIVE_BASE),
+        PhysAddr::new(crate::kernel::test::SIFIVE_BASE),
         PAGE_SIZE,
         PteFlags::R | PteFlags::W,
         &mut kmem,

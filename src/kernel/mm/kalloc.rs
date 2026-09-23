@@ -10,9 +10,9 @@
 
 use core::{fmt, slice};
 
-use crate::{
-    mem::{HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, paddr::PhysAddr, ppn::PhysPageNumber},
-    spinlock::Spinlock,
+use crate::kernel::{
+    mm::{HEAP_ADDR, MEM_ADDR, MEM_SIZE, PAGE_SIZE, paddr::PhysAddr, ppn::PhysPageNumber},
+    sync::spinlock::Spinlock,
 };
 
 const MAX_ORDER: usize = 12;

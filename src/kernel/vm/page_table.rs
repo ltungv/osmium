@@ -4,7 +4,7 @@ use core::ops;
 
 use bitflags::bitflags;
 
-use crate::mem::{ppn::PhysPageNumber, vpn::VirtPageNumber};
+use crate::kernel::mm::{ppn::PhysPageNumber, vpn::VirtPageNumber};
 
 /// A RISC-V page table node.
 ///
