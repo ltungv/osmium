@@ -1,5 +1,7 @@
 //! Process management.
 
+use core::marker::PhantomData;
+
 use crate::riscv::{
     sstatus::{self, Sstatus},
     tp,
@@ -10,15 +12,15 @@ pub const NCPU: usize = 4;
 
 /// Per CPU metadata.
 pub struct Cpu {
-    intr_enabled: bool,
-    intr_disables: usize,
+    intr: bool,
+    pins: usize,
 }
 
 impl Cpu {
     const fn zero() -> Self {
         Cpu {
-            intr_enabled: false,
-            intr_disables: 0,
+            intr: false,
+            pins: 0,
         }
     }
 
@@ -50,25 +52,27 @@ pub unsafe fn cpuid() -> usize {
 /// and the interrupt handler can deadlock when an interrupt happens after the thread acquired the
 /// spinlock. To avoid this, the kernel disables interrupt on a CPU when it acquires any lock.
 ///
-/// When the first [`PushOff`] is created, all interrupts are disable until the last [`PushOff`]
+/// When the first [`CpuPin`] is created, all interrupts are disable until the last [`CpuPin`]
 /// falls out of scope.
-pub struct IntrDisable;
+pub struct CpuPin {
+    _data: PhantomData<*mut ()>,
+}
 
-impl Default for IntrDisable {
+impl Default for CpuPin {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for IntrDisable {
+impl Drop for CpuPin {
     fn drop(&mut self) {
         let sstatus = unsafe { sstatus::read() };
         if sstatus.has(Sstatus::SIE) {
-            panic!("intr_disable - interruptible");
+            panic!("cpu_pin - interruptible");
         }
         let cpu = unsafe { Cpu::current() };
-        cpu.intr_disables -= 1;
-        if cpu.intr_disables == 0 && cpu.intr_enabled {
+        cpu.pins -= 1;
+        if cpu.pins == 0 && cpu.intr {
             unsafe {
                 sstatus::set(Sstatus::SIE);
             }
@@ -76,16 +80,16 @@ impl Drop for IntrDisable {
     }
 }
 
-impl IntrDisable {
-    /// Creates a new [`PushOff`], ensuring that the curent CPU has all interrupts disabled for the
-    /// lifetime of the [`PushOff`] instance.
+impl CpuPin {
+    /// Creates a new [`CpuPin`], ensuring that the curent CPU has all interrupts disabled for the
+    /// lifetime of the [`CpuPin`] instance.
     pub fn new() -> Self {
         let sstatus = unsafe { sstatus::read_clear(Sstatus::SIE) };
         let cpu = unsafe { Cpu::current() };
-        if cpu.intr_disables == 0 {
-            cpu.intr_enabled = sstatus.has(Sstatus::SIE);
+        if cpu.pins == 0 {
+            cpu.intr = sstatus.has(Sstatus::SIE);
         }
-        cpu.intr_disables += 1;
-        Self
+        cpu.pins += 1;
+        Self { _data: PhantomData }
     }
 }

@@ -16,7 +16,7 @@ use crate::{
 /// A 39-bit virtual address space.
 pub struct Sv39<'t> {
     root: PhysPageNumber,
-    _phantom: PhantomData<&'t mut PageTable>,
+    _data: PhantomData<&'t mut PageTable>,
 }
 
 impl<'t> Sv39<'t> {
@@ -27,7 +27,7 @@ impl<'t> Sv39<'t> {
         root_page_table.zero();
         Ok(Self {
             root,
-            _phantom: PhantomData,
+            _data: PhantomData,
         })
     }
 
