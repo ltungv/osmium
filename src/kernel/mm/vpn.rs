@@ -2,7 +2,7 @@
 
 use core::{fmt, ops};
 
-use crate::mem::vaddr::VirtAddr;
+use crate::kernel::mm::vaddr::VirtAddr;
 
 /// The virtual page number.
 ///

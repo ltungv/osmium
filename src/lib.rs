@@ -4,7 +4,7 @@
 #![no_main]
 #![no_std]
 #![reexport_test_harness_main = "kernel_test"]
-#![test_runner(test::run)]
+#![test_runner(kernel::test::run)]
 #![warn(
     clippy::all,
     clippy::alloc_instead_of_core,
@@ -13,21 +13,13 @@
     rustdoc::all
 )]
 
-pub mod kalloc;
-pub mod kheap;
-pub mod mem;
-pub mod paging;
-pub mod proc;
+pub mod device;
+pub mod kernel;
 pub mod riscv;
-pub mod spinlock;
-#[cfg(test)]
-mod test;
-pub mod trap;
-pub mod uart;
 
 use core::sync::atomic::{self, AtomicBool};
 
-use mem::{BSS_ADDR, STACK_ADDR};
+use kernel::mm::{BSS_ADDR, STACK_ADDR};
 use riscv::{
     ExceptionFlags, InterruptFlags, Privilege,
     mcounteren::{self, Mcounteren},
@@ -39,6 +31,14 @@ use riscv::{
     sie, stimecmp, tp, wfi,
 };
 
+use crate::{
+    device::uart,
+    kernel::{
+        mm::{kalloc, kheap},
+        proc, trap, vm,
+    },
+};
+
 #[cfg(test)]
 start!(test_main);
 
@@ -46,7 +46,7 @@ start!(test_main);
 #[unsafe(no_mangle)]
 extern "C" fn test_main() {
     kinit();
-    let cpuid = unsafe { proc::cpuid() };
+    let cpuid = unsafe { kernel::proc::cpuid() };
     if cpuid == 0 {
         kernel_test();
     } else {
@@ -57,7 +57,7 @@ extern "C" fn test_main() {
 #[cfg(test)]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    test::panic(info)
+    kernel::test::panic(info)
 }
 
 #[cfg(not(test))]
@@ -76,7 +76,7 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 #[derive(Debug)]
 pub enum Error {
     /// The kernel could not map a virtual address to a physical address.
-    BadMapping(paging::MappingError),
+    BadMapping(vm::MappingError),
 
     /// The kernel and/or its subsystems reach an unexpected state.
     BadState,
@@ -180,9 +180,9 @@ pub fn kinit() {
         // page allocator
         kalloc::init();
         // kernel page table
-        paging::kvminit();
+        vm::kvminit();
         // enable paging
-        paging::kvminithart();
+        vm::kvminithart();
         // object allocator
         kheap::init();
         // install trap vectors
@@ -195,7 +195,7 @@ pub fn kinit() {
             core::hint::spin_loop();
         }
         // enable paging
-        paging::kvminithart();
+        vm::kvminithart();
         // install trap vectors
         trap::inithart();
     }

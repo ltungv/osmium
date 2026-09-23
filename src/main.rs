@@ -14,8 +14,11 @@ use core::arch::asm;
 
 use osmium::{
     abort,
-    mem::{TRAMP_ADDR, TRAMPOLINE, vaddr::VirtAddr},
-    paging, println, start,
+    kernel::{
+        mm::{TRAMP_ADDR, TRAMPOLINE, vaddr::VirtAddr},
+        vm,
+    },
+    println, start,
 };
 
 start!(main);
@@ -26,7 +29,7 @@ start!(main);
 /// test runner if tests are enabled, or to `kernel_main` for normal operation.
 extern "C" fn main() {
     osmium::kinit();
-    let kvm = paging::kvm();
+    let kvm = vm::kvm();
 
     let vaddr1 = VirtAddr::new(TRAMPOLINE);
     let paddr1 = kvm

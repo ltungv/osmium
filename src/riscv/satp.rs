@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::mem::ppn::PhysPageNumber;
+use crate::kernel::mm::ppn::PhysPageNumber;
 
 pub struct Satp {
     bits: usize,

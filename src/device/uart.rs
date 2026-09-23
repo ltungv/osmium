@@ -5,7 +5,7 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::spinlock::Spinlock;
+use crate::kernel::sync::spinlock::Spinlock;
 
 /// Address of the UART device on the `virt` machine in `QEMU`
 pub const UART_BASE: usize = 0x1000_0000;
@@ -14,7 +14,7 @@ pub const UART_BASE: usize = 0x1000_0000;
 #[macro_export]
 macro_rules! print {
     ($($args:tt)*) => {{
-        $crate::uart::print(format_args!($($args)*));
+        $crate::device::uart::print(format_args!($($args)*));
     }};
 }
 

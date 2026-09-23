@@ -2,7 +2,7 @@
 
 use core::{fmt, ops};
 
-use crate::{mem::paddr::PhysAddr, paging::page_table::PageTable};
+use crate::kernel::{mm::paddr::PhysAddr, vm::page_table::PageTable};
 
 /// A physical page number.
 ///

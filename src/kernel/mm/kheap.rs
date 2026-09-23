@@ -8,14 +8,13 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use crate::{
-    kalloc::{self},
-    mem::{self, PAGE_SIZE},
-    spinlock::Spinlock,
+use crate::kernel::{
+    mm::{PAGE_SIZE, align_down, align_up, kalloc},
+    sync::spinlock::Spinlock,
 };
 
-fn align_up(ptr: *const u8, align: usize) -> *mut u8 {
-    let addr = mem::align_up(ptr as usize, align);
+fn align_ptr_up(ptr: *const u8, align: usize) -> *mut u8 {
+    let addr = align_up(ptr as usize, align);
     addr as *mut u8
 }
 
@@ -87,11 +86,11 @@ impl LinkedHeap {
             size_of::<Node>()
         );
         // align the start of the heap to the alignment of a node
-        let aligned_node_ptr = align_up(ptr, align_of::<Node>());
+        let aligned_node_ptr = align_ptr_up(ptr, align_of::<Node>());
         // the heap start address is shifted up a few bytes after alignment
         let aligned_offset = unsafe { aligned_node_ptr.offset_from_unsigned(ptr) };
         // calculate the number of usable bytes after aligning the start address and size
-        let heap_len = mem::align_down(size - aligned_offset, align_of::<Node>());
+        let heap_len = align_down(size - aligned_offset, align_of::<Node>());
         assert!(
             heap_len >= size_of::<Node>(),
             "heap should have at least {} bytes",
@@ -163,7 +162,7 @@ impl Node {
     unsafe fn make(info: Info, next: Option<NonNull<Self>>) -> NonNull<Self> {
         assert_eq!(
             info.ptr,
-            align_up(info.ptr, align_of::<Self>()),
+            align_ptr_up(info.ptr, align_of::<Self>()),
             "node should be aligned to {}",
             align_of::<Self>()
         );
@@ -193,14 +192,14 @@ impl Node {
         // the block's size and an optional pointer to the next free block
         // once occupied, the block is overwriten with the object described by the original layout
         let size = layout.size().max(size_of::<Self>());
-        let size = mem::align_up(size, align_of::<Self>());
+        let size = align_up(size, align_of::<Self>());
         Layout::from_size_align(size, layout.align())
     }
 
     fn try_merge(&mut self, heap_end: *mut u8) {
         let node_end = self.info().end();
         if node_end < heap_end {
-            let aligned_node_end = align_up(node_end, align_of::<Self>());
+            let aligned_node_end = align_ptr_up(node_end, align_of::<Self>());
             let next_node_header_end = aligned_node_end.wrapping_add(size_of::<Self>());
             if next_node_header_end > heap_end {
                 let offset = unsafe { heap_end.offset_from_unsigned(node_end) };
@@ -231,11 +230,11 @@ impl Info {
         if self.len < layout.size() {
             return None;
         }
-        let (alloc_addr, precede_info) = if self.ptr == align_up(self.ptr, layout.align()) {
+        let (alloc_addr, precede_info) = if self.ptr == align_ptr_up(self.ptr, layout.align()) {
             (self.ptr, None)
         } else {
             let shifted = self.ptr.wrapping_add(size_of::<Node>());
-            let aligned = align_up(shifted, layout.align());
+            let aligned = align_ptr_up(shifted, layout.align());
             let info = Self {
                 ptr: self.ptr,
                 len: unsafe { aligned.offset_from_unsigned(self.ptr) },
@@ -251,7 +250,7 @@ impl Info {
         let succeed_info = if succeed_len == 0 {
             None
         } else {
-            let addr = align_up(alloc_end, align_of::<Node>());
+            let addr = align_ptr_up(alloc_end, align_of::<Node>());
             let end = addr.wrapping_add(size_of::<Node>());
             if end > node_end {
                 return None;
