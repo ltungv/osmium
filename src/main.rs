@@ -18,34 +18,40 @@ mod kern;
 mod rv;
 mod util;
 
+use crate::kern::{
+    mm::{TRAMPOLINE, tramp_addr, vaddr::VirtAddr},
+    vm,
+};
+
 start!(start);
 
-#[cfg(test)]
 extern "C" fn start() {
     kern::sinit();
-    ktest();
-}
 
-#[cfg(not(test))]
-extern "C" fn start() {
-    kern::sinit();
-    kern::sched();
-}
-
-#[cfg(test)]
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    kern::test::panic(info);
-}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    println!("aborting!");
-    if let Some(p) = info.location() {
-        println!("panic: {} ({}:{})", info.message(), p.file(), p.line());
-    } else {
-        println!("panic: no information available");
+    #[cfg(test)]
+    {
+        ktest();
     }
-    kern::abort()
+
+    let vaddr1 = VirtAddr::new(TRAMPOLINE);
+    let vaddr2 = VirtAddr::new(tramp_addr());
+    let kvm = vm::kvm();
+
+    let paddr1 = kvm
+        .lock()
+        .translate(vaddr1)
+        .expect("address should be mapped");
+
+    let paddr2 = kvm
+        .lock()
+        .translate(vaddr1)
+        .expect("address should be mapped");
+
+    assert_eq!(paddr1, paddr2);
+    println!("{vaddr1:p} --> {paddr1:p}");
+    println!("{vaddr2:p} --> {paddr2:p}");
+
+    loop {
+        core::hint::spin_loop();
+    }
 }

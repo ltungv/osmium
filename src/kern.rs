@@ -4,13 +4,13 @@ pub mod mm;
 mod proc;
 pub mod sync;
 mod trap;
-mod vm;
+pub mod vm;
 
 #[cfg(test)]
 pub mod test;
 
 use core::{
-    arch::{asm, naked_asm},
+    arch::naked_asm,
     sync::atomic::{self, AtomicBool},
 };
 
@@ -29,16 +29,13 @@ use crate::{
     },
 };
 
-use mm::{TRAMPOLINE, bss_addr, kalloc, kheap, stack_addr, tramp_addr, vaddr::VirtAddr};
+use mm::{bss_addr, kalloc, kheap, stack_addr};
 
 /// Kernel error.
 #[derive(Debug)]
 pub enum Error {
     /// The kernel could not map a virtual address to a physical address.
     BadMapping(vm::MappingError),
-
-    /// The kernel and/or its subsystems reach an unexpected state.
-    BadState,
 
     /// There's no memory left on the device for the kernel.
     OutOfMemory,
@@ -50,7 +47,6 @@ impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::BadMapping(err) => write!(f, "{err}"),
-            Self::BadState => write!(f, "bad state"),
             Self::OutOfMemory => write!(f, "out of memory"),
         }
     }
@@ -168,39 +164,20 @@ pub fn sinit() {
     }
 }
 
-/// Run the kernel's scheduler
-pub fn sched() {
-    let vaddr1 = VirtAddr::new(TRAMPOLINE);
-    let vaddr2 = VirtAddr::new(tramp_addr());
-    let kvm = vm::kvm();
-
-    let paddr1 = kvm
-        .lock()
-        .translate(vaddr1)
-        .expect("address should be mapped");
-
-    let paddr2 = kvm
-        .lock()
-        .translate(vaddr1)
-        .expect("address should be mapped");
-
-    assert_eq!(paddr1, paddr2);
-    println!("{vaddr1:p} --> {paddr1:p}");
-    println!("{vaddr2:p} --> {paddr2:p}");
-
-    let a: usize;
-    unsafe {
-        asm!("csrr {}, mhartid", out(reg) a);
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    println!("aborting!");
+    if let Some(p) = info.location() {
+        println!("panic: {} ({}:{})", info.message(), p.file(), p.line());
+    } else {
+        println!("panic: no information available");
     }
-    println!("{a}");
-
-    loop {
-        core::hint::spin_loop();
-    }
+    abort()
 }
 
 /// Abort execution, preventing the current CPU from running.
-pub fn abort() -> ! {
+fn abort() -> ! {
     loop {
         wfi();
     }

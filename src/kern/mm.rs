@@ -8,6 +8,8 @@ pub mod slab;
 pub mod vaddr;
 pub mod vpn;
 
+use core::ptr;
+
 use crate::kern::mm::vaddr::VirtAddr;
 
 /// The size of a page in bytes.
@@ -26,6 +28,18 @@ pub const fn align_down(x: usize, align: usize) -> usize {
 pub const fn align_up(x: usize, align: usize) -> usize {
     assert!(align.is_power_of_two(), "align must be a power of two");
     (x + align - 1) & !(align - 1)
+}
+
+/// Align the pointer downwards to a multiple of `align`.
+pub fn align_ptr_down(ptr: *const u8, align: usize) -> *mut u8 {
+    let addr = align_down(ptr as usize, align);
+    ptr::with_exposed_provenance_mut(addr)
+}
+
+/// Align the pointer upwards to a multiple of `align`.
+pub fn align_ptr_up(ptr: *const u8, align: usize) -> *mut u8 {
+    let addr = align_up(ptr as usize, align);
+    ptr::with_exposed_provenance_mut(addr)
 }
 
 /// Address of the physical memory.

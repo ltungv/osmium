@@ -2,8 +2,6 @@
 
 #![expect(missing_docs, clippy::missing_safety_doc)]
 
-use core::arch::asm;
-
 pub mod mcounteren;
 pub mod medeleg;
 pub mod menvcfg;
@@ -21,6 +19,8 @@ pub mod stimecmp;
 pub mod stvec;
 pub mod time;
 pub mod tp;
+
+use core::arch::asm;
 
 /// RISC-V privilege levels.
 #[derive(PartialEq, Eq)]

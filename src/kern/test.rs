@@ -23,7 +23,9 @@ pub fn runner(cases: &[&dyn Case]) {
 }
 
 /// Test's panic handler.
-pub fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+#[cfg(test)]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     println!("[failed]\n");
     println!("error: {}\n", info);
     exit_qemu(SiFiveTestStatus::Failure(1))

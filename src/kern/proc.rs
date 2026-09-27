@@ -7,9 +7,6 @@ use crate::rv::{
     tp,
 };
 
-/// Total number of CPUs in the system.
-pub const NCPU: usize = 4;
-
 /// Per CPU metadata.
 pub struct Cpu {
     intr: bool,

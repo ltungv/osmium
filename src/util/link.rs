@@ -64,6 +64,12 @@ impl<T: ?Sized + AsRef<Self>> Link<T> {
         }
     }
 
+    pub fn next(&self) -> Option<Pin<&T>> {
+        let next_ptr = self.next.get()?;
+        let pin = unsafe { Pin::new_unchecked(next_ptr.as_ref()) };
+        Some(pin)
+    }
+
     /// Get an iterator over the list starting from the element after this link.
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {

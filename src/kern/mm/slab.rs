@@ -1,9 +1,9 @@
 //! A slab allocator.
 
-use core::{cell::Cell, marker::PhantomData, ptr::NonNull};
+use core::{cell::Cell, marker::PhantomData, pin::Pin, ptr::NonNull};
 
 use crate::{
-    kern::mm::{PAGE_SIZE, align_down, kalloc::Kmem, paddr::PhysAddr},
+    kern::mm::{PAGE_SIZE, align_down, align_ptr_down, kalloc::Kmem, paddr::PhysAddr},
     util::link::Link,
 };
 
@@ -12,6 +12,67 @@ struct Cache<T> {
     free_slabs: Link<Slab<T>>,
     full_slabs: Link<Slab<T>>,
     live_slabs: Link<Slab<T>>,
+}
+
+impl<T> Cache<T> {
+    fn new() -> Self {
+        Self {
+            free_slabs: Link::default(),
+            full_slabs: Link::default(),
+            live_slabs: Link::default(),
+        }
+    }
+
+    fn alloc(self: Pin<&Self>, kmem: &mut Kmem) -> Option<NonNull<T>> {
+        if let Some(slab) = self.live_slabs.next() {
+            let ptr = slab.take().expect("slab should have space");
+            if slab.is_full() {
+                slab.link.remove();
+                let full_slabs = unsafe { Pin::new_unchecked(&self.full_slabs) };
+                full_slabs.insert(slab);
+            }
+            return Some(ptr);
+        }
+        let slab = if let Some(slab) = self.free_slabs.next() {
+            slab.link.remove();
+            slab
+        } else {
+            let ptr = Slab::alloc(NonNull::from(self.get_ref()), kmem)?;
+            unsafe { Pin::new_unchecked(ptr.as_ref()) }
+        };
+        let ptr = slab.take().expect("slab should have space");
+        let live_slabs = unsafe { Pin::new_unchecked(&self.live_slabs) };
+        live_slabs.insert(slab);
+        Some(ptr)
+    }
+
+    fn free(self: Pin<&Self>, ptr: NonNull<T>) {
+        let page_ptr = align_ptr_down(ptr.as_ptr().cast(), PAGE_SIZE);
+        let slab_ptr = {
+            let ptr = unsafe { page_ptr.add(Slab::<T>::PAGE_OFFSET) };
+            let ptr = unsafe { NonNull::new_unchecked(ptr) };
+            ptr.cast::<Slab<T>>()
+        };
+        let slab = unsafe { Pin::new_unchecked(slab_ptr.as_ref()) };
+        let slab_was_full = slab.is_full();
+        slab.give(ptr);
+        if slab_was_full {
+            slab.link.remove();
+            let live_slabs = unsafe { Pin::new_unchecked(&self.live_slabs) };
+            live_slabs.insert(slab);
+        }
+        if slab.is_free() {
+            slab.link.remove();
+            let free_slabs = unsafe { Pin::new_unchecked(&self.free_slabs) };
+            free_slabs.insert(slab);
+        }
+    }
+
+    fn gc(self: Pin<&Self>, kmem: &mut Kmem) {
+        while let Some(slab) = self.free_slabs.next() {
+            Slab::<T>::free(NonNull::from(slab.get_ref()), kmem);
+        }
+    }
 }
 
 #[repr(C)]
@@ -97,11 +158,22 @@ impl<T> Slab<T> {
     }
 
     fn take(&self) -> Option<NonNull<T>> {
-        todo!()
+        let ptr = self.slot.take()?;
+        self.refs.set(self.refs.get() + 1);
+        Some(ptr)
     }
 
-    fn give() {
-        todo!()
+    fn give(&self, ptr: NonNull<T>) {
+        self.refs.set(self.refs.get() - 1);
+        self.slot.give(ptr);
+    }
+
+    fn is_free(&self) -> bool {
+        self.refs.get() == 0
+    }
+
+    fn is_full(&self) -> bool {
+        self.refs.get() == Self::NUM_SLOTS
     }
 }
 
@@ -142,7 +214,7 @@ impl<T> Slot<T> {
         let next = self.next.get()?;
         {
             let slot = unsafe { next.read() };
-            self.next.set(slot.next.get());
+            self.next.set(slot.next.replace(None));
         }
         Some(next.cast())
     }
@@ -156,5 +228,51 @@ impl<T> Slot<T> {
             ptr.write(Slot::new(self.next.get()));
         }
         self.next.set(Some(ptr));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::{pin::pin, ptr::NonNull};
+
+    use crate::{
+        kern::mm::{
+            kalloc,
+            slab::{Cache, Slab},
+        },
+        println,
+    };
+
+    #[test_case]
+    fn smoke() {
+        struct Dummy {
+            _a: bool,
+            _b: u8,
+            _c: u16,
+            _d: u32,
+            _e: u64,
+        }
+
+        println!();
+        println!("{:?}", kalloc::kmem().lock());
+
+        let cache = pin!(Cache::<Dummy>::new());
+        let mut ptrs: [Option<NonNull<Dummy>>; Slab::<Dummy>::NUM_SLOTS * 3] =
+            [None; Slab::<Dummy>::NUM_SLOTS * 3];
+
+        for ptr in &mut ptrs {
+            *ptr = cache.as_ref().alloc(&mut kalloc::kmem().lock());
+        }
+        println!("{:?}", kalloc::kmem().lock());
+
+        for ptr in &mut ptrs {
+            if let Some(ptr) = ptr.take() {
+                cache.as_ref().free(ptr);
+            }
+        }
+        println!("{:?}", kalloc::kmem().lock());
+
+        cache.as_ref().gc(&mut kalloc::kmem().lock());
+        println!("{:?}", kalloc::kmem().lock());
     }
 }
