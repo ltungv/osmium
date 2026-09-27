@@ -7,6 +7,8 @@ use crate::rv::{
     tp,
 };
 
+static mut CPUS: [Cpu; 4] = [const { Cpu::zero() }; 4];
+
 /// Per CPU metadata.
 pub struct Cpu {
     intr: bool,
@@ -22,24 +24,9 @@ impl Cpu {
     }
 
     /// Get a mutable reference to metadata of this CPU.
-    ///
-    /// # Safety
-    ///
-    /// See [`cpuid`] for details.
-    pub unsafe fn current() -> &'static mut Self {
-        static mut CPUS: [Cpu; 4] = [const { Cpu::zero() }; 4];
-        unsafe { &mut CPUS[cpuid()] }
+    pub fn current(pin: &mut CpuPin) -> &mut Self {
+        unsafe { &mut CPUS[pin.cpuid()] }
     }
-}
-
-/// Get the hardware thread id of the currently executing thread.
-///
-/// # Safety
-///
-/// Interrupt must be disable before calling this function to avoid racing with another thread on
-/// the `tp` register when a context switch occurs.
-pub unsafe fn cpuid() -> usize {
-    unsafe { tp::read() }
 }
 
 /// The lifecycle of this struct determines a section of the program's execution where interrupts
@@ -52,6 +39,7 @@ pub unsafe fn cpuid() -> usize {
 /// When the first [`CpuPin`] is created, all interrupts are disable until the last [`CpuPin`]
 /// falls out of scope.
 pub struct CpuPin {
+    // Making this struct `!Send + !Sync`.
     _data: PhantomData<*mut ()>,
 }
 
@@ -67,7 +55,7 @@ impl Drop for CpuPin {
         if sstatus.has(Sstatus::SIE) {
             panic!("cpu_pin - interruptible");
         }
-        let cpu = unsafe { Cpu::current() };
+        let cpu = Cpu::current(self);
         cpu.pins -= 1;
         if cpu.pins == 0 && cpu.intr {
             unsafe {
@@ -82,11 +70,17 @@ impl CpuPin {
     /// lifetime of the [`CpuPin`] instance.
     pub fn new() -> Self {
         let sstatus = unsafe { sstatus::read_clear(Sstatus::SIE) };
-        let cpu = unsafe { Cpu::current() };
+        let mut pin = Self { _data: PhantomData };
+        let cpu = Cpu::current(&mut pin);
+        // Take note of the SIE bit if we're creating the first pin of this CPU.
         if cpu.pins == 0 {
             cpu.intr = sstatus.has(Sstatus::SIE);
         }
         cpu.pins += 1;
-        Self { _data: PhantomData }
+        pin
+    }
+
+    pub fn cpuid(&self) -> usize {
+        unsafe { tp::read() }
     }
 }

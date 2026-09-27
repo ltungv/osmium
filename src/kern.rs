@@ -16,6 +16,7 @@ use core::{
 
 use crate::{
     dev::uart,
+    kern::proc::CpuPin,
     println,
     rv::{
         self, ExceptionFlags, InterruptFlags, Privilege,
@@ -58,7 +59,7 @@ impl core::fmt::Display for Error {
 extern "C" fn _entry() {
     naked_asm!(
         "la sp, _stack_addr",
-        "la a0, 0x1000",
+        "la a0, 0x4000",
         "csrr a1, mhartid",
         "addi a1, a1, 1",
         "mul a0, a0, a1",
@@ -134,8 +135,8 @@ pub fn minit(mepc: usize) {
 /// Initialize the system in supervisor mode.
 pub fn sinit() {
     static INIT: AtomicBool = AtomicBool::new(false);
-    let cpuid = unsafe { proc::cpuid() };
-    if cpuid == 0 {
+    let pin = CpuPin::new();
+    if pin.cpuid() == 0 {
         uart::init();
         println!();
         println!("osmium kernel is booting");

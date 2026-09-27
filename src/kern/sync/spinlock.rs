@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{self, AtomicBool},
 };
 
-use crate::kern::proc::{CpuPin, cpuid};
+use crate::kern::proc::CpuPin;
 
 /// A spin-based lock providing mutually exclusive access to data.
 pub struct Spinlock<T: ?Sized> {
@@ -37,16 +37,15 @@ impl<T> Spinlock<T> {
 
 impl<T: ?Sized> Spinlock<T> {
     /// Returns whether the current CPU is holding this lock.
-    pub fn holding(&self) -> bool {
-        let cpuid = unsafe { cpuid() };
-        self.locked.load(atomic::Ordering::Relaxed) && self.cpu.get() == cpuid
+    pub fn holding(&self, pin: &mut CpuPin) -> bool {
+        self.locked.load(atomic::Ordering::Relaxed) && pin.cpuid() == self.cpu.get()
     }
 
     /// Acquires the lock if it has not been acquired. Otherwise, blocks the current CPU until the
     /// lock can be acquired.
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let mut pin = CpuPin::new();
-        if self.holding() {
+        if self.holding(&mut pin) {
             panic!(
                 "spinlock ({}) - reentrance on cpu#{}",
                 self.name,
@@ -56,8 +55,8 @@ impl<T: ?Sized> Spinlock<T> {
         loop {
             match self.try_lock(pin) {
                 Ok(guard) => break guard,
-                Err(pin_) => {
-                    pin = pin_;
+                Err(_pin) => {
+                    pin = _pin;
                 }
             }
             while self.locked.load(atomic::Ordering::Relaxed) {
@@ -77,7 +76,7 @@ impl<T: ?Sized> Spinlock<T> {
             )
             .is_ok()
         {
-            self.cpu.set(unsafe { cpuid() });
+            self.cpu.set(pin.cpuid());
             Ok(SpinlockGuard {
                 lock: self,
                 _pin: pin,

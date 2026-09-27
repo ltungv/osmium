@@ -1,17 +1,14 @@
 //! Custom test runner for the kernel.
 
 use crate::{
-    kern::{
-        abort,
-        proc::{CpuPin, cpuid},
-    },
+    kern::{abort, proc::CpuPin},
     print, println,
 };
 
 /// A simple runner that sequentially goes over all test cases.
 pub fn runner(cases: &[&dyn Case]) {
-    let _cpu_pin = CpuPin::new();
-    if unsafe { cpuid() == 0 } {
+    let pin = CpuPin::new();
+    if pin.cpuid() == 0 {
         println!("running {} tests", cases.len());
         for case in cases {
             case.test();

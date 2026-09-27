@@ -172,7 +172,6 @@ impl Node {
             size_of::<Self>()
         );
         unsafe {
-            #[expect(clippy::cast_ptr_alignment)]
             let ptr = info.ptr.cast::<Self>();
             ptr.write(Self {
                 size: info.len,

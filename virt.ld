@@ -54,5 +54,5 @@ SECTIONS {
 
   . = ALIGN(4096);
   PROVIDE(_stack_addr = .);
-	PROVIDE(_heap_addr = _stack_addr + 0x80000);
+	PROVIDE(_heap_addr = _stack_addr + 0x10000);
 }

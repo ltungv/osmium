@@ -96,10 +96,10 @@ extern "C" fn kerneltrap() {
     let epc = unsafe { sepc::read() };
     match intr {
         InterruptCause::SupervisorExternal => {
-            println!("t-intr");
+            println!("e-intr");
         }
         InterruptCause::SupervisorTimer => {
-            println!("e-intr");
+            println!("t-intr");
         }
         _ => {
             println!("unexpected interrupt {intr:?}");
