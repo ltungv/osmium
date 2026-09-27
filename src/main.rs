@@ -13,19 +13,22 @@
     rustdoc::all
 )]
 
-pub mod dev;
-pub mod kern;
-pub mod rv;
-pub mod util;
+mod dev;
+mod kern;
+mod rv;
+mod util;
 
 start!(start);
 
+#[cfg(test)]
 extern "C" fn start() {
     kern::sinit();
-    #[cfg(test)]
-    {
-        ktest();
-    }
+    ktest();
+}
+
+#[cfg(not(test))]
+extern "C" fn start() {
+    kern::sinit();
     kern::sched();
 }
 
@@ -38,5 +41,11 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    kern::panic(info)
+    println!("aborting!");
+    if let Some(p) = info.location() {
+        println!("panic: {} ({}:{})", info.message(), p.file(), p.line());
+    } else {
+        println!("panic: no information available");
+    }
+    kern::abort()
 }

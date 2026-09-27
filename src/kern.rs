@@ -1,10 +1,10 @@
 //! A RISC-V kernel.
 
 pub mod mm;
-pub mod proc;
+mod proc;
 pub mod sync;
-pub mod trap;
-pub mod vm;
+mod trap;
+mod vm;
 
 #[cfg(test)]
 pub mod test;
@@ -29,7 +29,7 @@ use crate::{
     },
 };
 
-use mm::{bss_addr, stack_addr, tramp_addr, TRAMPOLINE, kalloc, kheap, vaddr::VirtAddr};
+use mm::{TRAMPOLINE, bss_addr, kalloc, kheap, stack_addr, tramp_addr, vaddr::VirtAddr};
 
 /// Kernel error.
 #[derive(Debug)]
@@ -197,17 +197,6 @@ pub fn sched() {
     loop {
         core::hint::spin_loop();
     }
-}
-
-/// Kernel's panic handler.
-pub fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    println!("aborting!");
-    if let Some(p) = info.location() {
-        println!("panic: {} ({}:{})", info.message(), p.file(), p.line());
-    } else {
-        println!("panic: no information available");
-    }
-    abort()
 }
 
 /// Abort execution, preventing the current CPU from running.
