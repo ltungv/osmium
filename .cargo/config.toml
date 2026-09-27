@@ -2,10 +2,8 @@
 target = "riscv64gc-unknown-none-elf"
 
 [target.riscv64gc-unknown-none-elf]
-linker = "riscv64-unknown-elf-gcc"
 rustflags = [
   '-C', 'link-arg=-Tvirt.ld',
-  '-C', 'link-arg=-Wl,--undefined=trampoline',
 ]
 runner = """\
 qemu-system-riscv64 \

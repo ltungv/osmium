@@ -1,7 +1,10 @@
 //! A risc-v kernel.
 
+#![feature(custom_test_frameworks)]
 #![no_main]
 #![no_std]
+#![reexport_test_harness_main = "ktest"]
+#![test_runner(kern::test::runner)]
 #![warn(
     clippy::all,
     clippy::alloc_instead_of_core,
@@ -10,48 +13,30 @@
     rustdoc::all
 )]
 
-use core::arch::asm;
+pub mod dev;
+pub mod kern;
+pub mod rv;
+pub mod util;
 
-use osmium::{
-    abort,
-    kernel::{
-        mm::{TRAMP_ADDR, TRAMPOLINE, vaddr::VirtAddr},
-        vm,
-    },
-    println, start,
-};
+start!(start);
 
-start!(main);
-
-/// The main Rust entry point of the kernel.
-///
-/// This function is called by the `boot` assembly code. It routes execution to the
-/// test runner if tests are enabled, or to `kernel_main` for normal operation.
-extern "C" fn main() {
-    osmium::kinit();
-    let kvm = vm::kvm();
-
-    let vaddr1 = VirtAddr::new(TRAMPOLINE);
-    let paddr1 = kvm
-        .lock()
-        .translate(vaddr1)
-        .expect("address should be mapped");
-
-    let vaddr2 = VirtAddr::new(unsafe { TRAMP_ADDR });
-    let paddr2 = kvm
-        .lock()
-        .translate(vaddr1)
-        .expect("address should be mapped");
-
-    assert_eq!(paddr1, paddr2);
-    println!("{vaddr1:p} --> {paddr1:p}");
-    println!("{vaddr2:p} --> {paddr2:p}");
-
-    let a: usize;
-    unsafe {
-        asm!("csrr {}, mhartid", out(reg) a);
+extern "C" fn start() {
+    kern::sinit();
+    #[cfg(test)]
+    {
+        ktest();
     }
-    println!("{a}");
+    kern::sched();
+}
 
-    abort();
+#[cfg(test)]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    kern::test::panic(info);
+}
+
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    kern::panic(info)
 }

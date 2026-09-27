@@ -1,9 +1,4 @@
-const ASM_FILES: [&str; 4] = [
-    "src/kernel/asm/boot.S",
-    "src/kernel/asm/mem.S",
-    "src/kernel/asm/trampoline.S",
-    "src/kernel/asm/trap.S",
-];
+const ASM_FILES: [&str; 2] = ["src/kern/asm/trampoline.S", "src/kern/asm/trap.S"];
 
 fn main() {
     let mut build = cc::Build::new();

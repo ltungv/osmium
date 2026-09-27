@@ -3,21 +3,14 @@ name = "osmium"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-name = "osmium"
-bench = false
-doctest = false
-test = true
-
 [[bin]]
 name = "osmium"
 bench = false
 doctest = false
-test = false
+test = true
 
 [dependencies]
 bitflags = "2.13.1"
 
 [build-dependencies]
 cc = "1.0"
-
