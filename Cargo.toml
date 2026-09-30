@@ -11,6 +11,3 @@ test = true
 
 [dependencies]
 bitflags = "2.13.1"
-
-[build-dependencies]
-cc = "1.0"

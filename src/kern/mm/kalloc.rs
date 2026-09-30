@@ -11,7 +11,7 @@
 use core::{fmt, slice};
 
 use crate::kern::{
-    mm::{heap_addr, mem_addr, mem_size, PAGE_SIZE, paddr::PhysAddr, ppn::PhysPageNumber},
+    mm::{PAGE_SIZE, heap_addr, mem_addr, mem_size, paddr::PhysAddr, ppn::PhysPageNumber},
     sync::spinlock::Spinlock,
 };
 
@@ -35,7 +35,10 @@ pub fn kmem() -> &'static Spinlock<Kmem> {
 pub fn init() {
     let mut kmem = KMEM.lock();
     unsafe {
-        kmem.init(PhysAddr::new(heap_addr()), (mem_addr() + mem_size()) - heap_addr());
+        kmem.init(
+            PhysAddr::new(heap_addr()),
+            (mem_addr() + mem_size()) - heap_addr(),
+        );
     }
 }
 

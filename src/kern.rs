@@ -53,18 +53,22 @@ impl core::fmt::Display for Error {
     }
 }
 
+/// The kernel's entrypoint.
+///
+/// When QEMU starts, all CPUs jump to the address of [`_entry`] and start executing.
+/// Each CPU then setup its own stack before calling into Rust to prepare the system.
 #[unsafe(link_section = ".text.init")]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 extern "C" fn _entry() {
     naked_asm!(
-        "la sp, _stack_addr",
-        "la a0, 0x4000",
-        "csrr a1, mhartid",
-        "addi a1, a1, 1",
-        "mul a0, a0, a1",
-        "add sp, sp, a0",
-        "call minit",
+        "la sp, _stack_addr", // sp = _stack_addr
+        "la a0, 0x4000",      // offset = 0x4000
+        "csrr a1, mhartid",   // cpuid = mhartid
+        "addi a1, a1, 1",     // cpuid += 1
+        "mul a0, a0, a1",     // offset *= cpuid
+        "add sp, sp, a0",     // sp += offset
+        "call minit",         // minit()
         "mret",
     )
 }

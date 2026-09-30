@@ -11,16 +11,25 @@ use crate::{
     },
 };
 
-/// Install the supervisor trap vector which is located at `kernelvec`.
+/// Install the supervisor trap vector which is located at [`kernelvec`].
 pub fn inithart() {
     unsafe {
         stvec::write(kernelvec as *const () as usize);
     }
 }
+
+#[unsafe(link_section = ".tramp")]
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+extern "C" fn trampoline() {
+    naked_asm!("j trampoline")
+}
+
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 extern "C" fn kernelvec() {
     naked_asm!(
+        // save stack space to hold the context
         "addi sp, sp, -128",
         // backup caller-saved registers.
         // return address
@@ -47,7 +56,7 @@ extern "C" fn kernelvec() {
         "sd t6, 128(sp)",
         // handle trap
         "call kerneltrap",
-        // restore registers
+        // restore caller-saved registers
         // return address
         "ld ra, 0(sp)",
         // global pointer
@@ -70,14 +79,22 @@ extern "C" fn kernelvec() {
         "ld t4, 112(sp)",
         "ld t5, 120(sp)",
         "ld t6, 128(sp)",
+        // return the used stack space
         "addi sp, sp, 128",
         "sret",
     )
 }
 
-/// Traps from the supervisor are handled here.
+#[unsafe(link_section = ".tramp")]
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+extern "C" fn uservec() {
+    naked_asm!("j uservec")
+}
+
+/// Traps from supervisor mode are handled here.
 ///
-/// When a trap occurs in supervisor mode, the CPU jumps to `kernelvec` which will in turn call this
+/// When a trap occurs in supervisor mode, the CPU jumps to [`kernelvec`] which will in turn call this
 /// function to handle the trap.
 #[unsafe(no_mangle)]
 extern "C" fn kerneltrap() {
@@ -112,24 +129,10 @@ extern "C" fn kerneltrap() {
     }
 }
 
-#[unsafe(link_section = ".tramp")]
-#[unsafe(naked)]
-#[unsafe(no_mangle)]
-extern "C" fn uservec() {
-    naked_asm!("j uservec")
-}
-
-/// Traps from the user are handled here.
+/// Traps from user mode are handled here.
 ///
-/// When a trap occurs in user mode, the CPU jumps to `uservec` which will in turn call this
+/// When a trap occurs in user mode, the CPU jumps to [`uservec`] which will in turn call this
 /// function to handle the trap.
 #[unsafe(link_section = ".tramp")]
 #[unsafe(no_mangle)]
 extern "C" fn usertrap() {}
-
-#[unsafe(link_section = ".tramp")]
-#[unsafe(naked)]
-#[unsafe(no_mangle)]
-extern "C" fn trampoline() {
-    naked_asm!("j trampoline")
-}
